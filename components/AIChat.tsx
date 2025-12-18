@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { callOpenRouterAPI } from '@/lib/openrouter'
 import { Transaction } from '@/types'
 import { Send, Bot, User } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -25,10 +26,17 @@ export default function AIChat() {
   useEffect(() => {
     loadCategories()
     loadTransactions()
+    
+    // Check if API key is configured
+    const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY
+    if (!apiKey) {
+      console.warn('NEXT_PUBLIC_OPENROUTER_API_KEY is not set')
+    }
+    
     // Initialize with welcome message
     setMessages([{
       role: 'assistant',
-      content: 'Hello! I\'m your AI finance assistant. I have access to all your transactions and can help you with insights, goal setting, and financial advice. What would you like to know?'
+      content: 'Hey! 👋 I\'m here to help with your finances. Ask me anything!'
     }])
   }, [])
 
@@ -91,26 +99,20 @@ export default function AIChat() {
         notes: t.notes
       }))
 
-      const systemPrompt = `You are a helpful AI finance assistant. You have access to the user's financial data:
+      const systemPrompt = `You're a friendly finance buddy chatting with a friend. Keep responses super short (20-30 words max) unless they ask for details. Be casual, warm, and human - like texting a friend. Use markdown for formatting (bold, lists, etc.) when helpful.
 
-Total Income: $${totalIncome.toFixed(2)}
-Total Expenses: $${totalExpenses.toFixed(2)}
-Net Amount: $${netAmount.toFixed(2)}
+User's finances:
+- Income: $${totalIncome.toFixed(2)}
+- Expenses: $${totalExpenses.toFixed(2)}
+- Net: $${netAmount.toFixed(2)}
 
-Category Breakdown:
-${Object.entries(categoryBreakdown).map(([cat, amt]) => `- ${cat}: $${amt.toFixed(2)}`).join('\n')}
+Top spending categories:
+${Object.entries(categoryBreakdown).slice(0, 5).map(([cat, amt]) => `- ${cat}: $${amt.toFixed(2)}`).join('\n')}
 
-Recent Transactions:
-${recentTransactions.map(t => `- ${t.date}: ${t.type} of $${t.amount} in ${t.category}${t.notes ? ` (${t.notes})` : ''}`).join('\n')}
+Recent transactions:
+${recentTransactions.slice(0, 5).map(t => `- ${t.date}: $${t.amount} on ${t.category}`).join('\n')}
 
-You can:
-1. Provide insights on spending patterns
-2. Help set financial goals
-3. Suggest ways to save money
-4. Analyze spending by category
-5. Answer questions about their finances
-
-Be helpful, concise, and actionable.`
+Remember: Keep it short, friendly, and helpful. Only go longer if they specifically ask for more details.`
 
       const apiMessages = [
         { role: 'system', content: systemPrompt },
@@ -124,9 +126,23 @@ Be helpful, concise, and actionable.`
       setMessages(prev => [...prev, assistantMessage])
     } catch (error) {
       console.error('Error calling AI:', error)
+      let errorContent = 'Sorry, I encountered an error.'
+      
+      if (error instanceof Error) {
+        if (error.message.includes('API key is not configured')) {
+          errorContent = 'OpenRouter API key is not configured. Please add NEXT_PUBLIC_OPENROUTER_API_KEY to your environment variables.'
+        } else if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+          errorContent = 'Invalid OpenRouter API key. Please check your NEXT_PUBLIC_OPENROUTER_API_KEY environment variable.'
+        } else if (error.message.includes('429')) {
+          errorContent = 'Rate limit exceeded. Please try again in a moment.'
+        } else {
+          errorContent = `Error: ${error.message}`
+        }
+      }
+      
       const errorMessage: Message = {
         role: 'assistant',
-        content: 'Sorry, I encountered an error. Please make sure your OpenRouter API key is configured correctly.'
+        content: errorContent
       }
       setMessages(prev => [...prev, errorMessage])
     } finally {
@@ -179,7 +195,28 @@ Be helpful, concise, and actionable.`
                         : 'bg-background border'
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    {message.role === 'assistant' ? (
+                      <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown
+                          components={{
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                            li: ({ children }) => <li className="ml-2">{children}</li>,
+                            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                            em: ({ children }) => <em className="italic">{children}</em>,
+                            code: ({ children }) => <code className="bg-muted px-1 py-0.5 rounded text-xs">{children}</code>,
+                            h1: ({ children }) => <h1 className="text-base font-bold mb-2">{children}</h1>,
+                            h2: ({ children }) => <h2 className="text-sm font-bold mb-1">{children}</h2>,
+                            h3: ({ children }) => <h3 className="text-sm font-semibold mb-1">{children}</h3>,
+                          }}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    )}
                   </div>
                   {message.role === 'user' && (
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">

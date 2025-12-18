@@ -1,18 +1,56 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import Dashboard from '@/components/Dashboard'
 import TransactionForm from '@/components/TransactionForm'
 import CalendarView from '@/components/CalendarView'
 import AIChat from '@/components/AIChat'
+import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, Bot } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, Bot, LogOut, User } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [showTransactionForm, setShowTransactionForm] = useState(false)
+  const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      setLoading(false)
+    })
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Auth />
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -22,9 +60,18 @@ export default function Home() {
             <Wallet className="h-6 w-6" />
             Finance Tracker
           </h1>
-          <Button onClick={() => setShowTransactionForm(true)}>
-            Add Transaction
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <User className="h-4 w-4" />
+              <span className="hidden sm:inline">{user.email}</span>
+            </div>
+            <Button onClick={() => setShowTransactionForm(true)}>
+              Add Transaction
+            </Button>
+            <Button variant="outline" onClick={handleSignOut} size="sm">
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </header>
 

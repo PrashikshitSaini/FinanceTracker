@@ -48,5 +48,7 @@ next-env.d.ts
 SETUP.md
 supabase-schema.sql
 VERCEL_DEPLOYMENT.md
-
+supabase-auth-migration.sql
+GOOGLE_AUTH_SETUP.md
+QUICK_GOOGLE_SETUP.md
 

@@ -73,6 +73,12 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
     setLoading(true)
 
     try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        alert('You must be logged in to add transactions')
+        return
+      }
+
       const transactionData = {
         amount: parseFloat(amount),
         category,
@@ -81,6 +87,7 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
         image_url: imageUrl,
         date,
         type,
+        user_id: user.id,
       }
 
       if (transaction) {
