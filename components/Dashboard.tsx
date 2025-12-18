@@ -7,6 +7,8 @@ import { Transaction } from '@/types'
 import { format, startOfMonth, endOfMonth, subMonths, addMonths } from 'date-fns'
 import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight, Edit, Trash2 } from 'lucide-react'
+import { useCurrency } from '@/contexts/CurrencyContext'
+import { formatCurrency } from '@/lib/currency'
 
 interface DashboardProps {
   showTableOnly?: boolean
@@ -18,6 +20,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
   const [loading, setLoading] = useState(true)
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const [paymentSourceMap, setPaymentSourceMap] = useState<Record<string, string>>({})
+  const { currency } = useCurrency()
 
   useEffect(() => {
     loadCategoriesAndSources()
@@ -149,7 +152,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                     </td>
                     <td className="p-2">{categoryMap[transaction.category] || transaction.category}</td>
                     <td className="p-2 font-semibold">
-                      ${transaction.amount.toFixed(2)}
+                      {formatCurrency(transaction.amount, currency)}
                     </td>
                     <td className="p-2 text-sm text-muted-foreground max-w-xs truncate">
                       {transaction.notes || '-'}
@@ -223,7 +226,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              ${totalIncome.toFixed(2)}
+              {formatCurrency(totalIncome, currency)}
             </div>
           </CardContent>
         </Card>
@@ -236,7 +239,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-600">
-              ${totalExpenses.toFixed(2)}
+              {formatCurrency(totalExpenses, currency)}
             </div>
           </CardContent>
         </Card>
@@ -251,7 +254,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
             <div className={`text-2xl font-bold ${
               netAmount >= 0 ? 'text-green-600' : 'text-red-600'
             }`}>
-              ${netAmount.toFixed(2)}
+              {formatCurrency(netAmount, currency)}
             </div>
           </CardContent>
         </Card>
@@ -273,7 +276,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                     <div key={item.category} className="space-y-1">
                       <div className="flex justify-between text-sm">
                         <span>{item.category}</span>
-                        <span className="font-semibold">${item.amount.toFixed(2)}</span>
+                        <span className="font-semibold">{formatCurrency(item.amount, currency)}</span>
                       </div>
                       <div className="w-full bg-muted rounded-full h-2">
                         <div
@@ -314,7 +317,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                     <div className={`font-semibold ${
                       transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {transaction.type === 'income' ? '+' : '-'}${transaction.amount.toFixed(2)}
+                      {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount, currency)}
                     </div>
                   </div>
                 ))}

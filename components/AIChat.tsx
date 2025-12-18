@@ -9,6 +9,8 @@ import { callOpenRouterAPI } from '@/lib/openrouter'
 import { Transaction } from '@/types'
 import { Send, Bot, User } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { useCurrency } from '@/contexts/CurrencyContext'
+import { formatCurrency } from '@/lib/currency'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -22,6 +24,7 @@ export default function AIChat() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { currency } = useCurrency()
 
   useEffect(() => {
     loadCategories()
@@ -102,15 +105,15 @@ export default function AIChat() {
       const systemPrompt = `You're a friendly finance buddy chatting with a friend. Keep responses super short (20-30 words max) unless they ask for details. Be casual, warm, and human - like texting a friend. Use markdown for formatting (bold, lists, etc.) when helpful.
 
 User's finances:
-- Income: $${totalIncome.toFixed(2)}
-- Expenses: $${totalExpenses.toFixed(2)}
-- Net: $${netAmount.toFixed(2)}
+- Income: ${formatCurrency(totalIncome, currency)}
+- Expenses: ${formatCurrency(totalExpenses, currency)}
+- Net: ${formatCurrency(netAmount, currency)}
 
 Top spending categories:
-${Object.entries(categoryBreakdown).slice(0, 5).map(([cat, amt]) => `- ${cat}: $${amt.toFixed(2)}`).join('\n')}
+${Object.entries(categoryBreakdown).slice(0, 5).map(([cat, amt]) => `- ${cat}: ${formatCurrency(amt, currency)}`).join('\n')}
 
 Recent transactions:
-${recentTransactions.slice(0, 5).map(t => `- ${t.date}: $${t.amount} on ${t.category}`).join('\n')}
+${recentTransactions.slice(0, 5).map(t => `- ${t.date}: ${formatCurrency(t.amount, currency)} on ${t.category}`).join('\n')}
 
 Remember: Keep it short, friendly, and helpful. Only go longer if they specifically ask for more details.`
 

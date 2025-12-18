@@ -8,6 +8,8 @@ import { Transaction } from '@/types'
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, startOfWeek, endOfWeek, addMonths, subMonths, startOfYear, endOfYear, eachMonthOfInterval, eachWeekOfInterval, getYear } from 'date-fns'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { CalendarView as CalendarViewType } from '@/types'
+import { useCurrency } from '@/contexts/CurrencyContext'
+import { formatCurrency } from '@/lib/currency'
 
 export default function CalendarView() {
   const [view, setView] = useState<CalendarViewType>('month')
@@ -16,6 +18,7 @@ export default function CalendarView() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const [paymentSourceMap, setPaymentSourceMap] = useState<Record<string, string>>({})
+  const { currency } = useCurrency()
 
   useEffect(() => {
     loadCategoriesAndSources()
@@ -124,7 +127,7 @@ export default function CalendarView() {
                   <div className={`text-xs ${
                     totals.net > 0 ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    ${Math.abs(totals.net).toFixed(0)}
+                    {formatCurrency(Math.abs(totals.net), currency)}
                   </div>
                 )}
               </div>
@@ -163,7 +166,7 @@ export default function CalendarView() {
                     <div className={`font-bold ${
                       transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {transaction.type === 'income' ? '+' : '-'}${transaction.amount.toFixed(2)}
+                      {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount, currency)}
                     </div>
                   </div>
                 </CardContent>
@@ -211,13 +214,13 @@ export default function CalendarView() {
                   <div className="flex justify-between">
                     <span className="text-sm text-muted-foreground">Income</span>
                     <span className="text-sm font-semibold text-green-600">
-                      ${monthIncome.toFixed(2)}
+                      {formatCurrency(monthIncome, currency)}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-muted-foreground">Expenses</span>
                     <span className="text-sm font-semibold text-red-600">
-                      ${monthExpenses.toFixed(2)}
+                      {formatCurrency(monthExpenses, currency)}
                     </span>
                   </div>
                   <div className="flex justify-between border-t pt-2">
@@ -225,7 +228,7 @@ export default function CalendarView() {
                     <span className={`text-sm font-bold ${
                       monthIncome - monthExpenses >= 0 ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      ${(monthIncome - monthExpenses).toFixed(2)}
+                      {formatCurrency(monthIncome - monthExpenses, currency)}
                     </span>
                   </div>
                 </div>
@@ -330,7 +333,7 @@ export default function CalendarView() {
                     <div className={`font-bold ${
                       transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {transaction.type === 'income' ? '+' : '-'}${transaction.amount.toFixed(2)}
+                      {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount, currency)}
                     </div>
                   </div>
                 ))}

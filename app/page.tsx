@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/card'
 import { Wallet, Calendar, BarChart3, Bot, LogOut, User } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
+import CurrencySelector from '@/components/CurrencySelector'
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard')
@@ -20,6 +21,17 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Check if this is a logout redirect
+    const urlParams = new URLSearchParams(window.location.search)
+    if (urlParams.get('logout') === 'true') {
+      // Clear the URL parameter
+      window.history.replaceState({}, '', window.location.pathname)
+      // Ensure user is null
+      setUser(null)
+      setLoading(false)
+      return
+    }
+
     // Check active session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
@@ -29,15 +41,67 @@ export default function Home() {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email)
+      
+      // If signed out, ensure we show the login screen
+      if (event === 'SIGNED_OUT' || !session) {
+        setUser(null)
+        setLoading(false)
+        return
+      }
+      
       setUser(session?.user ?? null)
+      setLoading(false)
     })
 
     return () => subscription.unsubscribe()
   }, [])
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
+    try {
+      // Clear local storage
+      localStorage.removeItem('currency')
+      
+      // Sign out from Supabase
+      await supabase.auth.signOut()
+      
+      // Clear all Supabase-related localStorage items
+      const keys = Object.keys(localStorage)
+      keys.forEach(key => {
+        if (key.includes('supabase') || key.includes('sb-')) {
+          localStorage.removeItem(key)
+        }
+      })
+      
+      // Clear all cookies related to Supabase/auth
+      document.cookie.split(";").forEach((c) => {
+        const cookieName = c.split("=")[0].trim()
+        if (cookieName.includes('supabase') || cookieName.includes('sb-') || cookieName.includes('auth')) {
+          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`
+          document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=${window.location.hostname}`
+        }
+      })
+      
+      // Clear session storage
+      sessionStorage.clear()
+      
+      // Clear user state
+      setUser(null)
+      
+      // Wait a moment to ensure everything is cleared
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
+      // Force a hard reload with cache bypass
+      window.location.href = window.location.origin + '?logout=true'
+    } catch (error: any) {
+      console.warn('Sign out exception:', error)
+      // On any error, still clear everything and redirect
+      localStorage.clear()
+      sessionStorage.clear()
+      setUser(null)
+      window.location.href = window.location.origin + '?logout=true'
+    }
   }
 
   if (loading) {
@@ -61,6 +125,7 @@ export default function Home() {
             Finance Tracker
           </h1>
           <div className="flex items-center gap-3">
+            <CurrencySelector />
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <User className="h-4 w-4" />
               <span className="hidden sm:inline">{user.email}</span>
