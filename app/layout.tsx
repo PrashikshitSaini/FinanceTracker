@@ -1,4 +1,4 @@
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { CurrencyProvider } from "@/contexts/CurrencyContext"
@@ -8,11 +8,6 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "Finance Tracker",
   description: "Track your finances with AI-powered insights",
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 5,
-  },
   icons: {
     icon: [
       { url: '/icon.png', sizes: 'any' },
@@ -20,6 +15,12 @@ export const metadata: Metadata = {
     ],
     apple: '/icon.png',
   },
+}
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
 }
 
 export default function RootLayout({

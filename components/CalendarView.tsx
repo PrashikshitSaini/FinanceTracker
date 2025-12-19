@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { Transaction } from '@/types'
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, startOfWeek, endOfWeek, addMonths, subMonths, startOfYear, endOfYear, eachMonthOfInterval, eachWeekOfInterval, getYear } from 'date-fns'
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, startOfWeek, endOfWeek, addMonths, subMonths, addDays, subDays, startOfYear, endOfYear, eachMonthOfInterval, eachWeekOfInterval, getYear } from 'date-fns'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { CalendarView as CalendarViewType } from '@/types'
 import { useCurrency } from '@/contexts/CurrencyContext'
@@ -18,11 +18,16 @@ export default function CalendarView() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const [paymentSourceMap, setPaymentSourceMap] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(false)
   const { currency } = useCurrency()
 
   useEffect(() => {
     loadCategoriesAndSources()
+  }, [])
+
+  useEffect(() => {
     loadTransactions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate, view])
 
   const loadCategoriesAndSources = async () => {
@@ -49,6 +54,7 @@ export default function CalendarView() {
   }
 
   const loadTransactions = async () => {
+    setLoading(true)
     let start: Date
     let end: Date
 
@@ -56,25 +62,47 @@ export default function CalendarView() {
       start = startOfMonth(currentDate)
       end = endOfMonth(currentDate)
     } else if (view === 'day') {
-      start = currentDate
-      end = currentDate
+      // For day view, load the entire month to ensure we have all transactions
+      // This prevents transactions from disappearing when switching views
+      start = startOfMonth(currentDate)
+      end = endOfMonth(currentDate)
     } else {
       start = startOfYear(currentDate)
       end = endOfYear(currentDate)
     }
 
-    const { data } = await supabase
-      .from('transactions')
-      .select('*')
-      .gte('date', format(start, 'yyyy-MM-dd'))
-      .lte('date', format(end, 'yyyy-MM-dd'))
-      .order('date', { ascending: false })
+    const startDateStr = format(start, 'yyyy-MM-dd')
+    const endDateStr = format(end, 'yyyy-MM-dd')
 
-    setTransactions(data || [])
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .gte('date', startDateStr)
+        .lte('date', endDateStr)
+        .order('date', { ascending: false })
+
+      if (error) {
+        console.error('Error loading transactions:', error)
+        return
+      }
+
+      setTransactions(data || [])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const getTransactionsForDate = (date: Date) => {
-    return transactions.filter(t => isSameDay(new Date(t.date), date))
+    // Normalize the input date to start of day for comparison
+    const normalizedDate = new Date(date)
+    normalizedDate.setHours(0, 0, 0, 0)
+    
+    return transactions.filter(t => {
+      const tDate = new Date(t.date)
+      tDate.setHours(0, 0, 0, 0)
+      return isSameDay(tDate, normalizedDate)
+    })
   }
 
   const getTotalForDate = (date: Date) => {
@@ -98,10 +126,10 @@ export default function CalendarView() {
     const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
     return (
-      <div className="space-y-4">
+      <div className="space-y-2 sm:space-y-4">
         <div className="grid grid-cols-7 gap-1">
           {weekDays.map((day) => (
-            <div key={day} className="p-2 text-center text-sm font-medium text-muted-foreground">
+            <div key={day} className="p-1 sm:p-2 text-center text-xs sm:text-sm font-medium text-muted-foreground">
               {day}
             </div>
           ))}
@@ -115,16 +143,23 @@ export default function CalendarView() {
             return (
               <div
                 key={day.toISOString()}
-                className={`min-h-[80px] p-1 border rounded cursor-pointer hover:bg-muted transition-colors ${
+                className={`min-h-[60px] sm:min-h-[80px] p-1 border rounded cursor-pointer hover:bg-muted transition-colors ${
                   !isCurrentMonth ? 'opacity-40' : ''
                 } ${isSelected ? 'ring-2 ring-primary' : ''}`}
-                onClick={() => setSelectedDate(day)}
+                onClick={() => {
+                  // Normalize the date to start of day
+                  const normalizedDay = new Date(day)
+                  normalizedDay.setHours(0, 0, 0, 0)
+                  setSelectedDate(normalizedDay)
+                  setCurrentDate(normalizedDay)
+                  setView('day')
+                }}
               >
-                <div className="text-sm font-medium mb-1">
+                <div className="text-xs sm:text-sm font-medium mb-1">
                   {format(day, 'd')}
                 </div>
                 {totals.net !== 0 && (
-                  <div className={`text-xs ${
+                  <div className={`text-[10px] sm:text-xs truncate ${
                     totals.net > 0 ? 'text-green-600' : 'text-red-600'
                   }`}>
                     {formatCurrency(Math.abs(totals.net), currency)}
@@ -139,12 +174,26 @@ export default function CalendarView() {
   }
 
   const renderDayView = () => {
-    const dayTransactions = getTransactionsForDate(currentDate)
+    // Normalize currentDate to start of day for consistent comparison
+    const normalizedDate = new Date(currentDate)
+    normalizedDate.setHours(0, 0, 0, 0)
+    const dayTransactions = getTransactionsForDate(normalizedDate)
+
+    if (loading) {
+      return (
+        <div className="space-y-4">
+          <div className="text-center">
+            <h3 className="text-xl sm:text-2xl font-bold">{format(normalizedDate, 'EEEE, MMMM d, yyyy')}</h3>
+          </div>
+          <p className="text-center text-muted-foreground">Loading transactions...</p>
+        </div>
+      )
+    }
 
     return (
       <div className="space-y-4">
         <div className="text-center">
-          <h3 className="text-2xl font-bold">{format(currentDate, 'EEEE, MMMM d, yyyy')}</h3>
+          <h3 className="text-xl sm:text-2xl font-bold">{format(normalizedDate, 'EEEE, MMMM d, yyyy')}</h3>
         </div>
         <div className="space-y-2">
           {dayTransactions.length === 0 ? (
@@ -152,18 +201,18 @@ export default function CalendarView() {
           ) : (
             dayTransactions.map((transaction) => (
               <Card key={transaction.id}>
-                <CardContent className="p-4">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="font-semibold">{categoryMap[transaction.category] || transaction.category}</div>
-                      <div className="text-sm text-muted-foreground">
+                <CardContent className="p-3 sm:p-4">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-sm sm:text-base">{categoryMap[transaction.category] || transaction.category}</div>
+                      <div className="text-xs sm:text-sm text-muted-foreground">
                         {paymentSourceMap[transaction.payment_source] || transaction.payment_source}
                       </div>
                       {transaction.notes && (
-                        <div className="text-sm mt-1">{transaction.notes}</div>
+                        <div className="text-xs sm:text-sm mt-1 break-words">{transaction.notes}</div>
                       )}
                     </div>
-                    <div className={`font-bold ${
+                    <div className={`font-bold text-sm sm:text-base flex-shrink-0 ${
                       transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                     }`}>
                       {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount, currency)}
@@ -241,42 +290,48 @@ export default function CalendarView() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
         <div className="flex gap-2">
           <Button
             variant={view === 'month' ? 'default' : 'outline'}
             onClick={() => setView('month')}
+            size="sm"
+            className="text-xs sm:text-sm"
           >
             Month
           </Button>
           <Button
             variant={view === 'day' ? 'default' : 'outline'}
             onClick={() => setView('day')}
+            size="sm"
+            className="text-xs sm:text-sm"
           >
             Day
           </Button>
           <Button
             variant={view === 'year' ? 'default' : 'outline'}
             onClick={() => setView('year')}
+            size="sm"
+            className="text-xs sm:text-sm"
           >
             Year
           </Button>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-center">
           <Button
             variant="outline"
             size="icon"
             onClick={() => {
               if (view === 'month') setCurrentDate(subMonths(currentDate, 1))
-              else if (view === 'day') setCurrentDate(subMonths(currentDate, 1))
+              else if (view === 'day') setCurrentDate(subDays(currentDate, 1))
               else setCurrentDate(subMonths(currentDate, 12))
             }}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <div className="text-lg font-semibold min-w-[200px] text-center">
+          <div className="text-base sm:text-lg font-semibold min-w-[120px] sm:min-w-[200px] text-center">
             {view === 'month' && format(currentDate, 'MMMM yyyy')}
             {view === 'day' && format(currentDate, 'MMMM d, yyyy')}
             {view === 'year' && format(currentDate, 'yyyy')}
@@ -286,7 +341,7 @@ export default function CalendarView() {
             size="icon"
             onClick={() => {
               if (view === 'month') setCurrentDate(addMonths(currentDate, 1))
-              else if (view === 'day') setCurrentDate(addMonths(currentDate, 1))
+              else if (view === 'day') setCurrentDate(addDays(currentDate, 1))
               else setCurrentDate(addMonths(currentDate, 12))
             }}
           >
@@ -295,6 +350,8 @@ export default function CalendarView() {
           <Button
             variant="outline"
             onClick={() => setCurrentDate(new Date())}
+            size="sm"
+            className="text-xs sm:text-sm"
           >
             Today
           </Button>
@@ -302,7 +359,7 @@ export default function CalendarView() {
       </div>
 
       <Card>
-        <CardContent className="p-6">
+        <CardContent className="p-3 sm:p-6">
           {view === 'month' && renderMonthView()}
           {view === 'day' && renderDayView()}
           {view === 'year' && renderYearView()}
