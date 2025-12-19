@@ -24,6 +24,7 @@ export default function AIChat() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const lastRequestTimeRef = useRef<number>(0)
   const { currency } = useCurrency()
 
   useEffect(() => {
@@ -70,6 +71,23 @@ export default function AIChat() {
 
   const handleSend = async () => {
     if (!input.trim() || loading) return
+
+    // Simple rate limiting: prevent requests more than once every 2 seconds
+    const now = Date.now()
+    const timeSinceLastRequest = now - lastRequestTimeRef.current
+    const minDelay = 2000 // 2 seconds minimum between requests
+
+    if (timeSinceLastRequest < minDelay) {
+      const waitTime = Math.ceil((minDelay - timeSinceLastRequest) / 1000)
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: `Please wait ${waitTime} more second${waitTime !== 1 ? 's' : ''} before sending another message.`
+      }
+      setMessages(prev => [...prev, errorMessage])
+      return
+    }
+
+    lastRequestTimeRef.current = now
 
     const userMessage: Message = { role: 'user', content: input }
     setMessages(prev => [...prev, userMessage])
@@ -136,8 +154,11 @@ Remember: Keep it short, friendly, and helpful. Only go longer if they specifica
           errorContent = 'OpenRouter API key is not configured. Please add NEXT_PUBLIC_OPENROUTER_API_KEY to your environment variables.'
         } else if (error.message.includes('401') || error.message.includes('Unauthorized')) {
           errorContent = 'Invalid OpenRouter API key. Please check your NEXT_PUBLIC_OPENROUTER_API_KEY environment variable.'
-        } else if (error.message.includes('429')) {
-          errorContent = 'Rate limit exceeded. Please try again in a moment.'
+        } else if (error.message.includes('429') || error.message.includes('Rate limit')) {
+          // Extract wait time from error message if available
+          const waitMatch = error.message.match(/(\d+)\s*seconds?/i)
+          const waitTime = waitMatch ? parseInt(waitMatch[1]) : 30
+          errorContent = `Rate limit exceeded. Please wait ${waitTime} seconds before trying again.`
         } else {
           errorContent = `Error: ${error.message}`
         }
