@@ -6,9 +6,10 @@ import { supabase } from '@/lib/supabase'
 import { Transaction } from '@/types'
 import { format, startOfMonth, endOfMonth, subMonths, addMonths } from 'date-fns'
 import { Button } from '@/components/ui/button'
-import { ChevronLeft, ChevronRight, Edit, Trash2, Repeat, ArrowRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Edit, Trash2, Repeat, ArrowRight, Camera } from 'lucide-react'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
+import ReceiptScanner from '@/components/ReceiptScanner'
 
 interface DashboardProps {
   showTableOnly?: boolean
@@ -20,6 +21,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
   const [loading, setLoading] = useState(true)
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
   const [paymentSourceMap, setPaymentSourceMap] = useState<Record<string, string>>({})
+  const [showReceiptScanner, setShowReceiptScanner] = useState(false)
   const { currency } = useCurrency()
 
   useEffect(() => {
@@ -189,11 +191,19 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <h2 className="text-2xl font-bold">
           {format(currentMonth, 'MMMM yyyy')}
         </h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="default"
+            onClick={() => setShowReceiptScanner(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            <Camera className="h-4 w-4 mr-2" />
+            Scan Receipt
+          </Button>
           <Button
             variant="outline"
             size="icon"
@@ -356,6 +366,15 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      <ReceiptScanner
+        open={showReceiptScanner}
+        onOpenChange={setShowReceiptScanner}
+        onTransactionAdded={() => {
+          loadTransactions()
+          loadCategoriesAndSources()
+        }}
+      />
     </div>
   )
 }
