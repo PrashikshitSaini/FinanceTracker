@@ -285,7 +285,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
               </div>
             </div>
             <a
-              href="https://main.d1r0tyulc37dw8.amplifyapp.com/"
+              href="https://ghost-sub-tracker.vercel.app/"
               target="_blank"
               rel="noopener noreferrer"
               className="w-full sm:w-auto flex-shrink-0"
