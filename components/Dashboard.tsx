@@ -261,15 +261,15 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
       </div>
 
       <Card className="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/20 dark:to-indigo-950/20 border-purple-200 dark:border-purple-800">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-4 flex-1 min-w-0">
-              <div className="flex-shrink-0 w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center">
-                <Repeat className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+        <CardContent className="p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
+              <div className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center">
+                <Repeat className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-semibold mb-1">Track Your Subscriptions</h3>
-                <p className="text-sm text-muted-foreground">
+                <h3 className="text-base sm:text-lg font-semibold mb-1">Track Your Subscriptions</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
                   Manage your recurring subscriptions with Ghost Sub tracker. Get weekly digests and never forget to cancel unused services.
                 </p>
               </div>
@@ -278,10 +278,11 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
               href="https://main.d1r0tyulc37dw8.amplifyapp.com/"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex-shrink-0"
+              className="w-full sm:w-auto flex-shrink-0"
             >
-              <Button className="bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2">
-                Open Ghost Sub Tracker
+              <Button className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center gap-2 text-sm sm:text-base px-4 py-2 sm:px-4 sm:py-2">
+                <span className="hidden sm:inline">Open Ghost Sub Tracker</span>
+                <span className="sm:hidden">Open Sub Tracker</span>
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </a>
