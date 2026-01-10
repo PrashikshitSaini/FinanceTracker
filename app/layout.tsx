@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   description: "Track your finances with AI-powered insights",
   icons: {
     icon: [
+      { url: '/wallet-icon.svg', type: 'image/svg+xml' },
       { url: '/icon.png', sizes: 'any' },
       { url: '/favicon.ico', sizes: '32x32', type: 'image/x-icon' },
     ],
