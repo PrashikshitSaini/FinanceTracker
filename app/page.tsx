@@ -42,7 +42,10 @@ export default function Home() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('Auth state changed:', event, session?.user?.email)
+      // Only log auth events in development mode, without exposing PII
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Auth state changed:', event)
+      }
       
       // If signed out, ensure we show the login screen
       if (event === 'SIGNED_OUT' || !session) {
@@ -95,7 +98,10 @@ export default function Home() {
       // Force a hard reload with cache bypass
       window.location.href = window.location.origin + '?logout=true'
     } catch (error: any) {
-      console.warn('Sign out exception:', error)
+      // Log error without exposing PII - only log error message, not full error object
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('Sign out exception:', error?.message || 'Unknown error')
+      }
       // On any error, still clear everything and redirect
       localStorage.clear()
       sessionStorage.clear()

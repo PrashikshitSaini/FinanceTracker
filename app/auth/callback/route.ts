@@ -28,5 +28,17 @@ export async function GET(request: Request) {
     await supabase.auth.exchangeCodeForSession(code)
   }
 
-  return NextResponse.redirect(requestUrl.origin)
+  // Validate redirect origin to prevent open redirect attacks
+  const allowedOrigins = [
+    process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+    // Add production domain when deployed
+    // 'https://your-production-domain.com',
+  ]
+
+  const origin = requestUrl.origin
+  const redirectUrl = allowedOrigins.includes(origin) 
+    ? origin 
+    : allowedOrigins[0]
+
+  return NextResponse.redirect(redirectUrl)
 }

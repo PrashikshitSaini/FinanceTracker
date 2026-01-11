@@ -37,7 +37,10 @@ export default function ImageUpload({ currentImageUrl, onImageUploaded }: ImageU
 
       onImageUploaded(data.publicUrl)
     } catch (error) {
-      console.error('Error uploading image:', error)
+      // Log error without exposing file paths or user information
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error uploading image:', error instanceof Error ? error.message : 'Unknown error')
+      }
       alert('Error uploading image. Please try again.')
     } finally {
       setUploading(false)

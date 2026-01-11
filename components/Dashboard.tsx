@@ -65,7 +65,10 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
       .order('date', { ascending: false })
 
     if (error) {
-      console.error('Error loading transactions:', error)
+      // Log error without exposing transaction data or user information
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error loading transactions:', error.message || 'Unknown error')
+      }
     } else {
       setTransactions(data || [])
     }
@@ -81,7 +84,10 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
       .eq('id', id)
 
     if (error) {
-      console.error('Error deleting transaction:', error)
+      // Log error without exposing transaction details
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error deleting transaction:', error.message || 'Unknown error')
+      }
       alert('Error deleting transaction')
     } else {
       loadTransactions()

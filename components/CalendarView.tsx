@@ -83,7 +83,10 @@ export default function CalendarView() {
         .order('date', { ascending: false })
 
       if (error) {
-        console.error('Error loading transactions:', error)
+        // Log error without exposing transaction data or user information
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Error loading transactions:', error.message || 'Unknown error')
+        }
         return
       }
 

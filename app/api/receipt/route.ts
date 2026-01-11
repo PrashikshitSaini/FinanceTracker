@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { receiptExtractionSchema } from '@/lib/validation'
+import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,7 +38,8 @@ export async function POST(request: NextRequest) {
           user = userData
         }
       } catch (err) {
-        console.error('Token verification error:', err)
+        // Log error without exposing sensitive token information
+        console.error('Token verification error:', err instanceof Error ? err.message : 'Unknown error')
         // Will fallback to cookie-based auth
       }
     }
@@ -75,7 +78,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY
+    // Check rate limit (after authentication)
+    const rateLimitResult = checkRateLimit(user.id, RATE_LIMITS.RECEIPT)
+    if (!rateLimitResult.success) {
+      const resetIn = rateLimitResult.resetTime
+        ? Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)
+        : 60
+      return NextResponse.json(
+        {
+          error: `Rate limit exceeded. Please wait ${resetIn} seconds before trying again.`,
+        },
+        { status: 429 }
+      )
+    }
+
+    const apiKey = process.env.OPENROUTER_API_KEY
     if (!apiKey) {
       return NextResponse.json(
         { error: 'OpenRouter API key is not configured' },
@@ -119,7 +136,8 @@ export async function POST(request: NextRequest) {
           paymentSources = await sourcesResponse.json()
         }
       } catch (err) {
-        console.error('Error fetching categories/sources:', err)
+        // Log error without exposing user data
+        console.error('Error fetching categories/sources:', err instanceof Error ? err.message : 'Unknown error')
         // Fallback to cookie-based client
         const cookieStore = await cookies()
         const supabaseForQuery = createServerClient(
@@ -259,9 +277,13 @@ If you cannot extract required fields, use these defaults:
         )
       }
       
+      // Log detailed error server-side only (don't expose API details)
+      console.error('OpenRouter API error:', response.status, errorMessage)
+      
+      // Return generic error message to client
       return NextResponse.json(
-        { error: `OpenRouter API error: ${errorMessage}` },
-        { status: response.status }
+        { error: 'Failed to process receipt. Please try again.' },
+        { status: 500 }
       )
     }
 
@@ -283,36 +305,61 @@ If you cannot extract required fields, use these defaults:
       jsonStr = jsonStr.split('```')[1].split('```')[0].trim()
     }
 
-    let extractedData
+    let parsedData
     try {
-      extractedData = JSON.parse(jsonStr)
+      parsedData = JSON.parse(jsonStr)
     } catch (parseError) {
-      console.error('Failed to parse AI response:', jsonStr)
+      // Log parse error without exposing potentially sensitive AI response content
+      console.error('Failed to parse AI response:', parseError instanceof Error ? parseError.message : 'Parse error')
       return NextResponse.json(
         { error: 'Failed to parse receipt data. Please try again.' },
         { status: 500 }
       )
     }
 
-    // Validate extracted data
-    if (typeof extractedData.amount !== 'number') {
-      extractedData.amount = 0
+    // Validate and sanitize extracted data using Zod schema
+    // First, ensure category and payment_source exist in the user's data
+    const validCategoryId = categories.find(c => c.id === parsedData.category)?.id || categories[0]?.id
+    const validPaymentSourceId = paymentSources.find(s => s.id === parsedData.payment_source)?.id || paymentSources[0]?.id
+
+    if (!validCategoryId || !validPaymentSourceId) {
+      return NextResponse.json(
+        { error: 'Please set up at least one category and payment source before scanning receipts.' },
+        { status: 400 }
+      )
     }
-    if (!extractedData.category || !categories.find(c => c.id === extractedData.category)) {
-      extractedData.category = categories[0]?.id || ''
+
+    // Prepare data for validation
+    const dataToValidate = {
+      amount: typeof parsedData.amount === 'number' ? parsedData.amount : 0,
+      category: validCategoryId,
+      payment_source: validPaymentSourceId,
+      date: parsedData.date || new Date().toISOString().split('T')[0],
+      notes: parsedData.notes || null,
     }
-    if (!extractedData.payment_source || !paymentSources.find(s => s.id === extractedData.payment_source)) {
-      extractedData.payment_source = paymentSources[0]?.id || ''
+
+    // Validate using Zod schema
+    const validationResult = receiptExtractionSchema.safeParse(dataToValidate)
+
+    if (!validationResult.success) {
+      console.error('Receipt extraction validation failed:', validationResult.error.errors)
+      return NextResponse.json(
+        { 
+          error: 'Invalid receipt data extracted. Please try again.',
+          details: validationResult.error.errors.map(e => e.message).join(', ')
+        },
+        { status: 400 }
+      )
     }
-    if (!extractedData.date) {
-      extractedData.date = new Date().toISOString().split('T')[0]
-    }
+
+    const extractedData = validationResult.data
 
     return NextResponse.json({ success: true, data: extractedData })
   } catch (error: any) {
-    console.error('Receipt processing error:', error)
+    // Log error without exposing sensitive user or transaction data
+    console.error('Receipt processing error:', error instanceof Error ? error.message : 'Unknown error')
     return NextResponse.json(
-      { error: error.message || 'Failed to process receipt' },
+      { error: 'Failed to process receipt. Please try again.' },
       { status: 500 }
     )
   }

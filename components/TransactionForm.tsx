@@ -29,6 +29,7 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([])
   const [paymentSources, setPaymentSources] = useState<{ id: string; name: string }[]>([])
   const [loading, setLoading] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (open) {
@@ -66,16 +67,75 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
     setType('expense')
     setDate(new Date().toISOString().split('T')[0])
     setImageUrl(null)
+    setErrors({})
+  }
+
+  // Client-side validation
+  const validateForm = (): boolean => {
+    const newErrors: Record<string, string> = {}
+
+    // Validate amount
+    const amountNum = parseFloat(amount)
+    if (isNaN(amountNum) || amountNum <= 0) {
+      newErrors.amount = 'Amount must be greater than 0'
+    } else if (amountNum > 1000000000) {
+      newErrors.amount = 'Amount exceeds maximum limit (1 billion)'
+    }
+
+    // Validate category
+    if (!category) {
+      newErrors.category = 'Please select a category'
+    } else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(category)) {
+      newErrors.category = 'Invalid category selected'
+    }
+
+    // Validate payment source
+    if (!paymentSource) {
+      newErrors.paymentSource = 'Please select a payment source'
+    } else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(paymentSource)) {
+      newErrors.paymentSource = 'Invalid payment source selected'
+    }
+
+    // Validate date
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(date)) {
+      newErrors.date = 'Date must be in YYYY-MM-DD format'
+    } else {
+      const transactionDate = new Date(date)
+      const minDate = new Date('1900-01-01')
+      const maxDate = new Date()
+      maxDate.setFullYear(maxDate.getFullYear() + 1) // Allow up to 1 year in the future
+
+      if (transactionDate < minDate || transactionDate > maxDate || isNaN(transactionDate.getTime())) {
+        newErrors.date = 'Date must be between 1900-01-01 and 1 year from today'
+      }
+    }
+
+    // Validate notes length
+    if (notes && notes.length > 1000) {
+      newErrors.notes = 'Notes cannot exceed 1000 characters'
+    }
+
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrors({})
+
+    // Client-side validation
+    if (!validateForm()) {
+      return
+    }
+
     setLoading(true)
 
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.user) {
         alert('You must be logged in to add transactions')
+        setLoading(false)
         return
       }
 
@@ -83,28 +143,56 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
         amount: parseFloat(amount),
         category,
         payment_source: paymentSource,
-        notes: notes || null,
-        image_url: imageUrl,
+        notes: notes.trim() || null,
+        image_url: imageUrl || null,
         date,
         type,
-        user_id: user.id,
       }
 
-      if (transaction) {
-        await supabase
-          .from('transactions')
-          .update(transactionData)
-          .eq('id', transaction.id)
-      } else {
-        await supabase.from('transactions').insert([transactionData])
+      // Use API route for server-side validation
+      const url = transaction 
+        ? '/api/transactions'
+        : '/api/transactions'
+      
+      const method = transaction ? 'PUT' : 'POST'
+      const body = transaction 
+        ? { id: transaction.id, ...transactionData }
+        : transactionData
+
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        // Handle validation errors from server
+        if (response.status === 400 && result.details) {
+          const serverErrors: Record<string, string> = {}
+          result.details.forEach((detail: { path: string; message: string }) => {
+            serverErrors[detail.path] = detail.message
+          })
+          setErrors(serverErrors)
+          alert(result.error || 'Please fix the errors and try again.')
+          return
+        }
+        throw new Error(result.error || 'Failed to save transaction')
       }
 
       resetForm()
       onOpenChange(false)
       window.location.reload()
     } catch (error) {
-      console.error('Error saving transaction:', error)
-      alert('Error saving transaction. Please try again.')
+      // Log error without exposing transaction data
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error saving transaction:', error instanceof Error ? error.message : 'Unknown error')
+      }
+      alert(error instanceof Error ? error.message : 'Error saving transaction. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -139,10 +227,18 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
                 id="amount"
                 type="number"
                 step="0.01"
+                min="0.01"
+                max="1000000000"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => {
+                  setAmount(e.target.value)
+                  if (errors.amount) setErrors({ ...errors, amount: '' })
+                }}
                 required
               />
+              {errors.amount && (
+                <p className="text-sm text-red-600 mt-1">{errors.amount}</p>
+              )}
             </div>
           </div>
 
@@ -152,7 +248,10 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
               <Select
                 id="category"
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                onChange={(e) => {
+                  setCategory(e.target.value)
+                  if (errors.category) setErrors({ ...errors, category: '' })
+                }}
                 required
               >
                 <option value="">Select category</option>
@@ -162,6 +261,9 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
                   </option>
                 ))}
               </Select>
+              {errors.category && (
+                <p className="text-sm text-red-600 mt-1">{errors.category}</p>
+              )}
             </div>
 
             <div>
@@ -169,7 +271,10 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
               <Select
                 id="paymentSource"
                 value={paymentSource}
-                onChange={(e) => setPaymentSource(e.target.value)}
+                onChange={(e) => {
+                  setPaymentSource(e.target.value)
+                  if (errors.paymentSource) setErrors({ ...errors, paymentSource: '' })
+                }}
                 required
               >
                 <option value="">Select source</option>
@@ -179,6 +284,9 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
                   </option>
                 ))}
               </Select>
+              {errors.paymentSource && (
+                <p className="text-sm text-red-600 mt-1">{errors.paymentSource}</p>
+              )}
             </div>
           </div>
 
@@ -188,9 +296,17 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
               id="date"
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => {
+                setDate(e.target.value)
+                if (errors.date) setErrors({ ...errors, date: '' })
+              }}
+              min="1900-01-01"
+              max={new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0]}
               required
             />
+            {errors.date && (
+              <p className="text-sm text-red-600 mt-1">{errors.date}</p>
+            )}
           </div>
 
           <div>
@@ -198,10 +314,24 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
             <Textarea
               id="notes"
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value
+                // Limit to 1000 characters
+                if (value.length <= 1000) {
+                  setNotes(value)
+                  if (errors.notes) setErrors({ ...errors, notes: '' })
+                }
+              }}
               placeholder="Add any notes about this transaction..."
               rows={3}
+              maxLength={1000}
             />
+            <p className="text-xs text-muted-foreground mt-1">
+              {notes.length}/1000 characters
+            </p>
+            {errors.notes && (
+              <p className="text-sm text-red-600 mt-1">{errors.notes}</p>
+            )}
           </div>
 
           <div>

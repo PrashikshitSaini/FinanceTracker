@@ -99,7 +99,7 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
       const imageBase64 = await convertToBase64(imageFile)
 
       // Call API to process receipt - pass access token in Authorization header
-      const response = await fetch('/api/receipt', {
+      const receiptResponse = await fetch('/api/receipt', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -109,17 +109,17 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
         body: JSON.stringify({ imageBase64 }),
       })
 
-      const result = await response.json()
+      const receiptResult = await receiptResponse.json()
 
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to process receipt')
+      if (!receiptResponse.ok) {
+        throw new Error(receiptResult.error || 'Failed to process receipt')
       }
 
-      if (!result.success || !result.data) {
+      if (!receiptResult.success || !receiptResult.data) {
         throw new Error('Invalid response from server')
       }
 
-      const extractedData = result.data
+      const extractedData = receiptResult.data
 
       // Clear the image from memory immediately after processing
       removeImage()
@@ -127,7 +127,7 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
       // Use today's date to ensure transaction appears in current month view immediately
       // This ensures the receipt shows up right away regardless of what date was on the receipt
       const today = new Date().toISOString().split('T')[0]
-      const transactionDate = today
+      const transactionDate = today // Always use today's date so it shows in current month view
 
       // Create transaction with extracted data (no image storage - deleted immediately after processing)
       const transactionData = {
@@ -147,10 +147,18 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
         .select()
 
       if (insertError) {
+        console.error('Insert error:', insertError)
         throw new Error(`Failed to save transaction: ${insertError.message}`)
       }
 
-      console.log('Transaction created successfully:', insertedData)
+      if (!insertedData || insertedData.length === 0) {
+        throw new Error('Transaction was not created - no data returned')
+      }
+
+      // Log success without exposing transaction PII (amount, notes, etc.)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Transaction created successfully:', insertedData.length, 'record(s)')
+      }
 
       setSuccess(true)
       
@@ -166,7 +174,10 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
         window.location.reload()
       }, 1500)
     } catch (err: any) {
-      console.error('Receipt processing error:', err)
+      // Log error without exposing PII - only log error message
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Receipt processing error:', err?.message || 'Unknown error')
+      }
       setError(err.message || 'Failed to process receipt. Please try again.')
     } finally {
       setProcessing(false)

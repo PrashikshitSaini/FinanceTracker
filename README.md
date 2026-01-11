@@ -34,7 +34,7 @@ Create a `.env.local` file in the root directory:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-NEXT_PUBLIC_OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
@@ -78,7 +78,6 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 │   └── AIChat.tsx          # AI assistant chat
 ├── lib/
 │   ├── supabase.ts         # Supabase client
-│   ├── openrouter.ts       # OpenRouter API client
 │   └── utils.ts            # Utility functions
 └── types/
     └── index.ts            # TypeScript types

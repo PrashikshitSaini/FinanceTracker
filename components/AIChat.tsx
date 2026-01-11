@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
-import { callOpenRouterAPI } from '@/lib/openrouter'
 import { Transaction } from '@/types'
 import { Send, Bot, User } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -30,12 +29,6 @@ export default function AIChat() {
   useEffect(() => {
     loadCategories()
     loadTransactions()
-    
-    // Check if API key is configured
-    const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY
-    if (!apiKey) {
-      console.warn('NEXT_PUBLIC_OPENROUTER_API_KEY is not set')
-    }
     
     // Initialize with welcome message
     setMessages([{
@@ -71,6 +64,17 @@ export default function AIChat() {
 
   const handleSend = async () => {
     if (!input.trim() || loading) return
+
+    // Check if user is authenticated before making API call
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) {
+      const errorMessage: Message = {
+        role: 'assistant',
+        content: 'Please log in to use the AI assistant.'
+      }
+      setMessages(prev => [...prev, errorMessage])
+      return
+    }
 
     // Simple rate limiting: prevent requests more than once every 2 seconds
     const now = Date.now()
@@ -141,19 +145,45 @@ Remember: Keep it short, friendly, and helpful. Only go longer if they specifica
         { role: 'user', content: input }
       ]
 
-      const response = await callOpenRouterAPI(apiMessages)
+      // Get session to pass access token for authentication
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Please log in to use the AI assistant.')
+      }
+
+      // Call server-side API route to keep API key secure
+      const response = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        credentials: 'include', // Include cookies as backup
+        body: JSON.stringify({ messages: apiMessages }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to get AI response')
+      }
+
+      if (!result.success || !result.content) {
+        throw new Error('Invalid response from AI service')
+      }
       
-      const assistantMessage: Message = { role: 'assistant', content: response }
+      const assistantMessage: Message = { role: 'assistant', content: result.content }
       setMessages(prev => [...prev, assistantMessage])
     } catch (error) {
-      console.error('Error calling AI:', error)
+      // Log error without exposing sensitive information
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error calling AI:', error instanceof Error ? error.message : 'Unknown error')
+      }
       let errorContent = 'Sorry, I encountered an error.'
       
       if (error instanceof Error) {
-        if (error.message.includes('API key is not configured')) {
-          errorContent = 'OpenRouter API key is not configured. Please add NEXT_PUBLIC_OPENROUTER_API_KEY to your environment variables.'
-        } else if (error.message.includes('401') || error.message.includes('Unauthorized')) {
-          errorContent = 'Invalid OpenRouter API key. Please check your NEXT_PUBLIC_OPENROUTER_API_KEY environment variable.'
+        if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+          errorContent = 'Please log in to use the AI assistant.'
         } else if (error.message.includes('429') || error.message.includes('Rate limit')) {
           // Extract wait time from error message if available
           const waitMatch = error.message.match(/(\d+)\s*seconds?/i)
