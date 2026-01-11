@@ -31,8 +31,7 @@ export async function GET(request: Request) {
   // Validate redirect origin to prevent open redirect attacks
   const allowedOrigins = [
     process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
-    // Add production domain when deployed
-    // 'https://your-production-domain.com',
+    'https://financetrackerforyou.vercel.app',
   ]
 
   const origin = requestUrl.origin
