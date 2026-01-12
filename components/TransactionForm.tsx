@@ -163,14 +163,20 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
         method,
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         credentials: 'include',
         body: JSON.stringify(body),
       })
 
-      const result = await response.json()
-
       if (!response.ok) {
+        let result
+        try {
+          result = await response.json()
+        } catch (e) {
+          throw new Error(`Failed to save transaction: ${response.status} ${response.statusText}`)
+        }
+        
         // Handle validation errors from server
         if (response.status === 400 && result.details) {
           const serverErrors: Record<string, string> = {}
@@ -183,6 +189,8 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
         }
         throw new Error(result.error || 'Failed to save transaction')
       }
+
+      const result = await response.json()
 
       resetForm()
       onOpenChange(false)
