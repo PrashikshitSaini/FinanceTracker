@@ -62,6 +62,71 @@ export default function AIChat() {
     if (data) setTransactions(data)
   }
 
+  // Helper function to parse date string safely (handles YYYY-MM-DD format)
+  const parseDate = (dateString: string): Date => {
+    // If date is in YYYY-MM-DD format, parse it as local date to avoid timezone issues
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      const [year, month, day] = dateString.split('-').map(Number)
+      return new Date(year, month - 1, day)
+    }
+    return new Date(dateString)
+  }
+
+  // Helper function to get week number and year from date (ISO week)
+  const getWeekKey = (dateString: string): string => {
+    const date = parseDate(dateString)
+    // Get ISO week number
+    const d = new Date(date)
+    d.setHours(0, 0, 0, 0)
+    const dayNum = d.getDay() || 7
+    d.setDate(d.getDate() + 4 - dayNum)
+    const yearStart = new Date(d.getFullYear(), 0, 1)
+    const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+    const year = d.getFullYear()
+    return `${year}-W${week.toString().padStart(2, '0')}`
+  }
+
+  // Helper function to get month key from date
+  const getMonthKey = (dateString: string): string => {
+    const date = parseDate(dateString)
+    const year = date.getFullYear()
+    const month = (date.getMonth() + 1).toString().padStart(2, '0')
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                       'July', 'August', 'September', 'October', 'November', 'December']
+    return `${year}-${month} (${monthNames[date.getMonth()]})`
+  }
+
+  // Helper function to get year key from date
+  const getYearKey = (dateString: string): string => {
+    return parseDate(dateString).getFullYear().toString()
+  }
+
+  // Organize transactions by time periods
+  const organizeTransactionsByTime = () => {
+    const byWeek: Record<string, Transaction[]> = {}
+    const byMonth: Record<string, Transaction[]> = {}
+    const byYear: Record<string, Transaction[]> = {}
+
+    transactions.forEach(transaction => {
+      // Group by week
+      const weekKey = getWeekKey(transaction.date)
+      if (!byWeek[weekKey]) byWeek[weekKey] = []
+      byWeek[weekKey].push(transaction)
+
+      // Group by month
+      const monthKey = getMonthKey(transaction.date)
+      if (!byMonth[monthKey]) byMonth[monthKey] = []
+      byMonth[monthKey].push(transaction)
+
+      // Group by year
+      const yearKey = getYearKey(transaction.date)
+      if (!byYear[yearKey]) byYear[yearKey] = []
+      byYear[yearKey].push(transaction)
+    })
+
+    return { byWeek, byMonth, byYear }
+  }
+
   const handleSend = async () => {
     if (!input.trim() || loading) return
 
@@ -102,17 +167,17 @@ export default function AIChat() {
       // Prepare context with transaction summary
       const totalIncome = transactions
         .filter(t => t.type === 'income')
-        .reduce((sum, t) => sum + t.amount, 0)
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
       const totalExpenses = transactions
         .filter(t => t.type === 'expense')
-        .reduce((sum, t) => sum + t.amount, 0)
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
       const netAmount = totalIncome - totalExpenses
 
       const categoryBreakdown = transactions
         .filter(t => t.type === 'expense')
         .reduce((acc, t) => {
           const categoryName = categoryMap[t.category] || t.category
-          acc[categoryName] = (acc[categoryName] || 0) + t.amount
+          acc[categoryName] = (acc[categoryName] || 0) + (Number(t.amount) || 0)
           return acc
         }, {} as Record<string, number>)
 
@@ -124,18 +189,109 @@ export default function AIChat() {
         notes: t.notes
       }))
 
+      // Organize transactions by time periods
+      const { byWeek, byMonth, byYear } = organizeTransactionsByTime()
+
+      // Debug logging in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Transaction organization:', {
+          totalTransactions: transactions.length,
+          weeks: Object.keys(byWeek).length,
+          months: Object.keys(byMonth).length,
+          years: Object.keys(byYear).length,
+          sampleWeek: Object.entries(byWeek)[0],
+          sampleMonth: Object.entries(byMonth)[0],
+        })
+      }
+
+      // Format transactions by week
+      const weeklyData = Object.entries(byWeek)
+        .sort(([a], [b]) => b.localeCompare(a))
+        .slice(0, 12) // Last 12 weeks
+        .map(([week, txs]) => {
+          const weekIncome = txs.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          const weekExpenses = txs.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          return `Week ${week}: Income ${formatCurrency(weekIncome, currency)}, Expenses ${formatCurrency(weekExpenses, currency)}, Net ${formatCurrency(weekIncome - weekExpenses, currency)} (${txs.length} transactions)`
+        })
+        .join('\n')
+
+      // Format transactions by month
+      const monthlyData = Object.entries(byMonth)
+        .sort(([a], [b]) => b.localeCompare(a))
+        .slice(0, 12) // Last 12 months
+        .map(([month, txs]) => {
+          const monthIncome = txs.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          const monthExpenses = txs.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          return `${month}: Income ${formatCurrency(monthIncome, currency)}, Expenses ${formatCurrency(monthExpenses, currency)}, Net ${formatCurrency(monthIncome - monthExpenses, currency)} (${txs.length} transactions)`
+        })
+        .join('\n')
+
+      // Format transactions by year
+      const yearlyData = Object.entries(byYear)
+        .sort(([a], [b]) => b.localeCompare(a))
+        .map(([year, txs]) => {
+          const yearIncome = txs.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          const yearExpenses = txs.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+          return `Year ${year}: Income ${formatCurrency(yearIncome, currency)}, Expenses ${formatCurrency(yearExpenses, currency)}, Net ${formatCurrency(yearIncome - yearExpenses, currency)} (${txs.length} transactions)`
+        })
+        .join('\n')
+
+      // Format detailed transactions by time period (for AI to reference specific transactions)
+      const detailedWeeklyTransactions = Object.entries(byWeek)
+        .sort(([a], [b]) => b.localeCompare(a))
+        .slice(0, 4) // Last 4 weeks with details
+        .map(([week, txs]) => {
+          // Sort transactions by date (newest first) within the week
+          const sortedTxs = [...txs].sort((a, b) => b.date.localeCompare(a.date))
+          const txsList = sortedTxs.slice(0, 10).map(t => 
+            `  - ${t.date}: ${formatCurrency(t.amount, currency)} (${t.type}) - ${categoryMap[t.category] || t.category}${t.notes ? ` - ${t.notes}` : ''}`
+          ).join('\n')
+          return `Week ${week}:\n${txsList}${txs.length > 10 ? `\n  ... and ${txs.length - 10} more transactions` : ''}`
+        })
+        .join('\n\n')
+
+      const detailedMonthlyTransactions = Object.entries(byMonth)
+        .sort(([a], [b]) => b.localeCompare(a))
+        .slice(0, 3) // Last 3 months with details
+        .map(([month, txs]) => {
+          // Sort transactions by date (newest first) within the month
+          const sortedTxs = [...txs].sort((a, b) => b.date.localeCompare(a.date))
+          const txsList = sortedTxs.slice(0, 15).map(t => 
+            `  - ${t.date}: ${formatCurrency(t.amount, currency)} (${t.type}) - ${categoryMap[t.category] || t.category}${t.notes ? ` - ${t.notes}` : ''}`
+          ).join('\n')
+          return `${month}:\n${txsList}${txs.length > 15 ? `\n  ... and ${txs.length - 15} more transactions` : ''}`
+        })
+        .join('\n\n')
+
       const systemPrompt = `You're a friendly finance buddy chatting with a friend. Keep responses super short (20-30 words max) unless they ask for details. Be casual, warm, and human - like texting a friend. Use markdown for formatting (bold, lists, etc.) when helpful.
 
-User's finances:
-- Income: ${formatCurrency(totalIncome, currency)}
-- Expenses: ${formatCurrency(totalExpenses, currency)}
+User's overall finances:
+- Total Income: ${formatCurrency(totalIncome, currency)}
+- Total Expenses: ${formatCurrency(totalExpenses, currency)}
 - Net: ${formatCurrency(netAmount, currency)}
 
 Top spending categories:
 ${Object.entries(categoryBreakdown).slice(0, 5).map(([cat, amt]) => `- ${cat}: ${formatCurrency(amt, currency)}`).join('\n')}
 
-Recent transactions:
+Recent transactions (last 5):
 ${recentTransactions.slice(0, 5).map(t => `- ${t.date}: ${formatCurrency(t.amount, currency)} on ${t.category}`).join('\n')}
+
+Transactions by WEEK (last 12 weeks):
+${weeklyData || 'No weekly data available'}
+
+Transactions by MONTH (last 12 months):
+${monthlyData || 'No monthly data available'}
+
+Transactions by YEAR:
+${yearlyData || 'No yearly data available'}
+
+Detailed weekly transactions (last 4 weeks):
+${detailedWeeklyTransactions || 'No weekly transaction details available'}
+
+Detailed monthly transactions (last 3 months):
+${detailedMonthlyTransactions || 'No monthly transaction details available'}
+
+You have access to all transaction data organized by week, month, and year. When the user asks about specific time periods (e.g., "How much did I spend last month?", "What were my expenses in week 45?", "Show me transactions from 2024"), use the organized data above to provide accurate answers. You can reference specific transactions, dates, amounts, and categories from the detailed sections.
 
 Remember: Keep it short, friendly, and helpful. Only go longer if they specifically ask for more details.`
 
