@@ -278,7 +278,13 @@ export async function POST(request: NextRequest) {
       // ── Simple/fast mode: structured data, no AI call ──
       mode = 'simple'
       const rawAmount = body.amount as number
-      if (rawAmount <= 0 || rawAmount > AMOUNT_MAX || !Number.isFinite(rawAmount)) {
+
+      // Zero means "I didn't pay anything" — skip silently so the caller doesn't need to handle it.
+      if (rawAmount === 0) {
+        return NextResponse.json({ success: true, mode: 'simple', skipped: true, data: null }, { status: 200 })
+      }
+
+      if (rawAmount < 0 || rawAmount > AMOUNT_MAX || !Number.isFinite(rawAmount)) {
         return NextResponse.json(
           { error: 'Amount must be a positive number up to 1,000,000,000.' },
           { status: 422 }
