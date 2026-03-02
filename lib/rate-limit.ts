@@ -90,4 +90,5 @@ export function checkRateLimit(
 export const RATE_LIMITS = {
   AI_CHAT: { limit: 10, window: 60 * 1000 }, // 10 requests per minute
   RECEIPT: { limit: 20, window: 60 * 1000 }, // 20 requests per minute
+  QUICK_ADD: { limit: 30, window: 60 * 1000 }, // 30 requests per minute
 } as const

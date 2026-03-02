@@ -19,10 +19,31 @@ export default function ImageUpload({ currentImageUrl, onImageUploaded }: ImageU
   const handleFileSelect = async (file: File | null) => {
     if (!file) return
 
+    // Allowlist image MIME types — reject anything that isn't a raster image.
+    const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic'])
+    if (!ALLOWED_TYPES.has(file.type)) {
+      alert('Only JPEG, PNG, WebP, GIF, and HEIC images are supported.')
+      return
+    }
+
+    // Enforce a 10 MB upload limit client-side to give a fast, friendly error before
+    // the upload attempt fails at the network/storage layer.
+    const MAX_SIZE_BYTES = 10 * 1024 * 1024
+    if (file.size > MAX_SIZE_BYTES) {
+      alert('Image must be smaller than 10 MB.')
+      return
+    }
+
     setUploading(true)
     try {
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${Math.random()}.${fileExt}`
+      // Use crypto.randomUUID() for an unguessable, collision-resistant filename rather than
+      // Math.random(), which has only ~52 bits of entropy and a predictable seed in some engines.
+      const ext = file.type === 'image/jpeg' ? 'jpg'
+        : file.type === 'image/png' ? 'png'
+        : file.type === 'image/webp' ? 'webp'
+        : file.type === 'image/gif' ? 'gif'
+        : 'jpg'
+      const fileName = `${crypto.randomUUID()}.${ext}`
       const filePath = `receipts/${fileName}`
 
       const { error: uploadError } = await supabase.storage

@@ -1,17 +1,16 @@
 import { z } from 'zod'
 
 /**
- * Sanitize HTML from user input by stripping HTML tags
- * This prevents XSS attacks if notes are ever rendered as HTML
+ * Treats input as plain text by removing all markup characters and HTML entities.
+ * This is an allowlist approach: only printable non-markup characters survive.
+ * A denylist (blocking specific tags like <script>) is bypassable via encoding tricks;
+ * stripping every < > & character eliminates the entire injection surface.
  */
 export function sanitizeHtml(input: string | null | undefined): string | null {
   if (!input) return null
-  // Strip HTML tags - replace with plain text equivalent
   return input
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&[^;]+;/g, '')
-    .trim()
+    .replace(/[<>&"'`]/g, '')
+    .trim() || null
 }
 
 /**
@@ -74,11 +73,28 @@ const transactionBaseSchema = z.object({
     .optional()
     .transform((val) => sanitizeHtml(val)),
   
+  // Only permit HTTPS URLs pointing to Supabase storage to prevent SSRF if image_url
+  // is ever fetched server-side in the future, and to block javascript: / data: URIs.
   image_url: z.union([
-    z.string().url('Image URL must be a valid URL'),
+    z.string()
+      .url('Image URL must be a valid URL')
+      .refine(
+        (url) => {
+          try {
+            const parsed = new URL(url)
+            return (
+              parsed.protocol === 'https:' &&
+              (parsed.hostname.endsWith('.supabase.co') || parsed.hostname === 'supabase.co')
+            )
+          } catch {
+            return false
+          }
+        },
+        'Image URL must be a Supabase storage URL'
+      ),
     z.null()
   ]).optional(),
-  
+
   user_id: z.string().uuid('User ID must be a valid UUID').optional(),
 })
 
@@ -164,10 +180,25 @@ export const transactionUpdateSchema = z.object({
     .transform((val) => sanitizeHtml(val)),
   
   image_url: z.union([
-    z.string().url('Image URL must be a valid URL'),
+    z.string()
+      .url('Image URL must be a valid URL')
+      .refine(
+        (url) => {
+          try {
+            const parsed = new URL(url)
+            return (
+              parsed.protocol === 'https:' &&
+              (parsed.hostname.endsWith('.supabase.co') || parsed.hostname === 'supabase.co')
+            )
+          } catch {
+            return false
+          }
+        },
+        'Image URL must be a Supabase storage URL'
+      ),
     z.null()
   ]).optional(),
-  
+
   user_id: z.string().uuid('User ID must be a valid UUID').optional(),
 })
 

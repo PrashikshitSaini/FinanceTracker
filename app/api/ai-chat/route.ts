@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json()
-    const { messages, retries = 3 } = body
+    const { messages } = body
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
@@ -109,10 +109,40 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Cap message count and per-message content length to prevent token exhaustion and prompt injection.
+    // 50 messages × 4 000 chars ≈ ~200 KB of context — generous for a chat but bounded.
+    const MAX_MESSAGES = 50
+    const MAX_CONTENT_LENGTH = 4000
+    if (messages.length > MAX_MESSAGES) {
+      return NextResponse.json(
+        { error: 'Too many messages in conversation history.' },
+        { status: 400 }
+      )
+    }
+
+    const ALLOWED_ROLES = new Set(['user', 'assistant', 'system'])
+    for (const msg of messages) {
+      if (typeof msg !== 'object' || msg === null) {
+        return NextResponse.json({ error: 'Invalid message format.' }, { status: 400 })
+      }
+      if (!ALLOWED_ROLES.has(msg.role)) {
+        return NextResponse.json({ error: 'Invalid message role.' }, { status: 400 })
+      }
+      if (typeof msg.content !== 'string' || msg.content.length > MAX_CONTENT_LENGTH) {
+        return NextResponse.json(
+          { error: 'Message content exceeds maximum length.' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // retries is server-controlled only — never accept from client input
+    const MAX_RETRIES = 3
+
     // Call OpenRouter API with retry logic
     let lastError: Error | null = null
-    
-    for (let attempt = 0; attempt < retries; attempt++) {
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -148,7 +178,7 @@ export async function POST(request: NextRequest) {
           console.error('OpenRouter API error:', response.status, errorMessage)
           
           // Retry on 5xx errors
-          if (response.status >= 500 && attempt < retries - 1) {
+          if (response.status >= 500 && attempt < MAX_RETRIES - 1) {
             await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
             lastError = new Error('AI service temporarily unavailable')
             continue
@@ -183,7 +213,7 @@ export async function POST(request: NextRequest) {
         })
       } catch (error) {
         // If it's the last attempt or not a retryable error, throw
-        if (attempt === retries - 1 || !(error instanceof Error && error.message.includes('429'))) {
+        if (attempt === MAX_RETRIES - 1 || !(error instanceof Error && error.message.includes('429'))) {
           lastError = error instanceof Error ? error : new Error('Unknown error')
           break
         }

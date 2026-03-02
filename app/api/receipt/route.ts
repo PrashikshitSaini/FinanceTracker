@@ -4,6 +4,11 @@ import { cookies } from 'next/headers'
 import { receiptExtractionSchema } from '@/lib/validation'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
+// Vercel's default body limit is 4.5 MB, but enforce explicitly here so any future
+// runtime change doesn't silently open a large-payload vector for token exhaustion.
+// A 1920×1080 JPEG at quality 0.8 compresses to well under 500 KB; 6 MB base64 is ~4.5 MB raw.
+const MAX_IMAGE_BASE64_LENGTH = 6 * 1024 * 1024 // 6 MB of base64 characters
+
 export async function POST(request: NextRequest) {
   try {
     const { imageBase64 } = await request.json()
@@ -12,6 +17,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Image is required' },
         { status: 400 }
+      )
+    }
+
+    if (typeof imageBase64 !== 'string' || imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
+      return NextResponse.json(
+        { error: 'Image exceeds maximum allowed size.' },
+        { status: 413 }
       )
     }
 

@@ -142,8 +142,6 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
         return
       }
 
-      const user = session.user // Store user for later use
-
       // Compress image before converting to base64 to avoid Vercel body size limits
       const compressedImage = await compressImage(imageFile, 1920, 0.8)
       const imageBase64 = await convertToBase64(compressedImage)
@@ -174,40 +172,34 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
       // Clear the image from memory immediately after processing
       removeImage()
 
-      // Use today's date to ensure transaction appears in current month view immediately
-      // This ensures the receipt shows up right away regardless of what date was on the receipt
+      // Use today's date to ensure transaction appears in current month view immediately.
       const today = new Date().toISOString().split('T')[0]
-      const transactionDate = today // Always use today's date so it shows in current month view
 
-      // Create transaction with extracted data (no image storage - deleted immediately after processing)
-      const transactionData = {
+      // Route through the validated API endpoint so all server-side checks (UUID validation,
+      // amount bounds, notes sanitization) are applied consistently regardless of entry path.
+      const transactionPayload = {
         amount: extractedData.amount || 0,
         category: extractedData.category || '',
         payment_source: extractedData.payment_source || '',
         notes: extractedData.notes || null,
-        image_url: null, // Don't store receipt images - processed and deleted immediately
-        date: transactionDate,
+        image_url: null,
+        date: today,
         type: 'expense' as const,
-        user_id: user.id,
       }
 
-      const { error: insertError, data: insertedData } = await supabase
-        .from('transactions')
-        .insert([transactionData])
-        .select()
+      const txResponse = await fetch('/api/transactions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify(transactionPayload),
+      })
 
-      if (insertError) {
-        console.error('Insert error:', insertError)
-        throw new Error(`Failed to save transaction: ${insertError.message}`)
-      }
-
-      if (!insertedData || insertedData.length === 0) {
-        throw new Error('Transaction was not created - no data returned')
-      }
-
-      // Log success without exposing transaction PII (amount, notes, etc.)
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Transaction created successfully:', insertedData.length, 'record(s)')
+      if (!txResponse.ok) {
+        const txError = await txResponse.json().catch(() => ({}))
+        throw new Error(txError.error || 'Failed to save transaction')
       }
 
       setSuccess(true)
