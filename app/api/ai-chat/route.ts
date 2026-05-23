@@ -3,6 +3,11 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
+// OpenRouter model for the chat assistant. Env-overridable so the model can
+// be rolled back / upgraded without a code deploy. DeepSeek V4 Pro is a strong
+// general chat model and shares pricing with the categorization use case.
+const CHAT_MODEL = process.env.OPENROUTER_CHAT_MODEL || 'deepseek/deepseek-v4-pro'
+
 /**
  * POST /api/ai-chat
  * Server-side API route for OpenRouter AI chat requests
@@ -109,10 +114,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Cap message count and per-message content length to prevent token exhaustion and prompt injection.
-    // 50 messages × 4 000 chars ≈ ~200 KB of context — generous for a chat but bounded.
+    // Cap message count and per-message content length to prevent token
+    // exhaustion and prompt injection. The per-message cap has to be large
+    // enough for the AIChat component's system prompt, which includes detailed
+    // weekly + monthly transaction breakdowns and easily exceeds 10 KB for any
+    // user with a real history. We size it to 20 KB per message, capped at 50
+    // messages — about 1 MB worst-case per call, which the rate limit
+    // (10 calls/minute/user) keeps bounded against abuse.
     const MAX_MESSAGES = 50
-    const MAX_CONTENT_LENGTH = 4000
+    const MAX_CONTENT_LENGTH = 20000
     if (messages.length > MAX_MESSAGES) {
       return NextResponse.json(
         { error: 'Too many messages in conversation history.' },
@@ -121,16 +131,26 @@ export async function POST(request: NextRequest) {
     }
 
     const ALLOWED_ROLES = new Set(['user', 'assistant', 'system'])
-    for (const msg of messages) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]
       if (typeof msg !== 'object' || msg === null) {
         return NextResponse.json({ error: 'Invalid message format.' }, { status: 400 })
       }
       if (!ALLOWED_ROLES.has(msg.role)) {
         return NextResponse.json({ error: 'Invalid message role.' }, { status: 400 })
       }
-      if (typeof msg.content !== 'string' || msg.content.length > MAX_CONTENT_LENGTH) {
+      if (typeof msg.content !== 'string') {
+        return NextResponse.json({ error: 'Invalid message content.' }, { status: 400 })
+      }
+      if (msg.content.length > MAX_CONTENT_LENGTH) {
+        // Include actionable detail (which message, what length) so the
+        // client can adjust. Role and length aren't sensitive — they're
+        // the client's own data being echoed back.
         return NextResponse.json(
-          { error: 'Message content exceeds maximum length.' },
+          {
+            error: `Message content exceeds maximum length of ${MAX_CONTENT_LENGTH} characters.`,
+            details: `Message ${i} (role: ${msg.role}) was ${msg.content.length} characters.`,
+          },
           { status: 400 }
         )
       }
@@ -153,7 +173,7 @@ export async function POST(request: NextRequest) {
             'X-Title': 'Finance Tracker',
           },
           body: JSON.stringify({
-            model: 'openai/gpt-oss-120b',
+            model: CHAT_MODEL,
             messages: messages,
           }),
         })

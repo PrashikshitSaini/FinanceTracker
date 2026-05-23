@@ -40,6 +40,190 @@ const API_KEY_MAX_LENGTH = 256
 
 const AMOUNT_MAX = 1_000_000_000
 
+// OpenRouter model for AI categorization. Env-overridable so we can roll back
+// (or upgrade) without a code deploy. Standard (non-reasoning) mode is intended —
+// reasoning emits `reasoning_details` that would break our strict JSON parse and
+// roughly double latency for a task that doesn't need chain-of-thought.
+const QUICK_ADD_MODEL = process.env.OPENROUTER_QUICK_ADD_MODEL || 'deepseek/deepseek-v4-pro'
+
+// Exactly 4 ASCII digits — matches what the DB CHECK constraint enforces on
+// payment_sources.card_last_four. Anything else is rejected before lookup.
+const CARD_LAST_FOUR_RE = /^[0-9]{4}$/
+
+// Idempotency token from the client (MacroDroid). Capped so a malformed payload
+// can't blow up the unique-index lookup or persist arbitrary garbage.
+const CLIENT_REF_MAX_LENGTH = 128
+
+// Postgres unique-violation SQLSTATE — used to detect that an idempotent insert
+// raced with a parallel request and the row already exists.
+const PG_UNIQUE_VIOLATION = '23505'
+
+/**
+ * Best-effort: create a per-user payment_source for a card we've never
+ * seen before. Called when a Wallet notif arrives with a card_last_four
+ * that doesn't match any payment_source the caller can currently see.
+ *
+ * `payment_sources` has both a shared pool (rows with user_id IS NULL —
+ * created in the past via Supabase Dashboard, visible to everyone) and
+ * per-user rows (user_id = owner). RLS enforces this: any authenticated
+ * user can read shared ∪ own, but can only INSERT rows with their own
+ * user_id. New auto-created rows are therefore scoped to the inserting
+ * user and don't pollute anyone else's payment_source list.
+ *
+ * If the INSERT is denied (e.g., the migration's RLS policies haven't
+ * been applied yet), we swallow the error and return null — the
+ * transaction itself still logs against whichever default the caller's
+ * mode branch picks. Capture beats correctness.
+ *
+ * Naming: "Card •• 1234" — the user can rename it later.
+ */
+async function tryCreatePaymentSource(params: {
+  userId: string
+  cardLastFour: string
+  accessToken: string | null
+  apiKeyAuth: boolean
+}): Promise<{ id: string; name: string; card_last_four: string } | null> {
+  const { userId, cardLastFour, accessToken, apiKeyAuth } = params
+  if (!CARD_LAST_FOUR_RE.test(cardLastFour)) return null
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey) return null
+
+  const name = `Card •• ${cardLastFour}`
+  // user_id is required by the RLS INSERT policy (payment_sources_insert_own)
+  // and ensures the new row is scoped to this user only — other users won't
+  // see it. The signed-JWT path below makes auth.uid() resolve to userId so
+  // the WITH CHECK passes.
+  const payload = { user_id: userId, name, card_last_four: cardLastFour }
+
+  try {
+    if (apiKeyAuth) {
+      const userJwt = signUserJwt(userId)
+      if (!userJwt) return null
+      const res = await fetch(`${supabaseUrl}/rest/v1/payment_sources`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${userJwt}`,
+          'apikey': supabaseKey,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : rows ?? null
+    }
+
+    if (accessToken) {
+      const res = await fetch(`${supabaseUrl}/rest/v1/payment_sources`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'apikey': supabaseKey,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : rows ?? null
+    }
+
+    const cookieStore = await cookies()
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookies: {
+        get(name: string) { return cookieStore.get(name)?.value },
+        set(name: string, value: string, options: any) { cookieStore.set({ name, value, ...options }) },
+        remove(name: string, options: any) { cookieStore.set({ name, value: '', ...options }) },
+      },
+    })
+    const { data } = await supabase
+      .from('payment_sources')
+      .insert([payload])
+      .select()
+      .single()
+    return data ?? null
+  } catch (err) {
+    console.error('auto-create payment_source failed:', err instanceof Error ? err.message : 'Unknown error')
+    return null
+  }
+}
+
+/**
+ * Look up an existing transaction by (user_id, client_ref). Used for
+ * idempotency: when the phone retries a POST, we return the prior result
+ * instead of inserting a second row. Uses whatever auth context the caller is
+ * already using so RLS sees the lookup the same way it would see the write.
+ *
+ * Returns the existing transaction row, or null if none / on any error.
+ * Errors are intentionally swallowed: failing closed (proceeding to insert)
+ * is preferable to surfacing an idempotency-lookup error to the user, because
+ * the DB unique index is the real backstop.
+ */
+async function findExistingByClientRef(params: {
+  userId: string
+  clientRef: string
+  accessToken: string | null
+  apiKeyAuth: boolean
+}): Promise<unknown | null> {
+  const { userId, clientRef, accessToken, apiKeyAuth } = params
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey) return null
+
+  // Build the PostgREST URL once — same query for both token-bearing paths.
+  const url =
+    `${supabaseUrl}/rest/v1/transactions` +
+    `?user_id=eq.${encodeURIComponent(userId)}` +
+    `&client_ref=eq.${encodeURIComponent(clientRef)}` +
+    `&select=*&limit=1`
+
+  try {
+    if (apiKeyAuth) {
+      const userJwt = signUserJwt(userId)
+      if (!userJwt) return null
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${userJwt}`, 'apikey': supabaseKey },
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    }
+
+    if (accessToken) {
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'apikey': supabaseKey },
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    }
+
+    // Cookie / browser-session path.
+    const cookieStore = await cookies()
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookies: {
+        get(name: string) { return cookieStore.get(name)?.value },
+        set(name: string, value: string, options: any) { cookieStore.set({ name, value, ...options }) },
+        remove(name: string, options: any) { cookieStore.set({ name, value: '', ...options }) },
+      },
+    })
+    const { data } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('client_ref', clientRef)
+      .maybeSingle()
+    return data ?? null
+  } catch (err) {
+    console.error('client_ref lookup error:', err instanceof Error ? err.message : 'Unknown error')
+    return null
+  }
+}
+
 /**
  * POST /api/quick-add
  * Two modes for adding transactions:
@@ -51,6 +235,17 @@ const AMOUNT_MAX = 1_000_000_000
  *
  * **AI mode** (natural language) — send free-form text:
  *   { "text": "Spent 20.84 on Chipotle" }
+ *
+ * Optional fields shared by both modes (added for Android payment automation):
+ *   - "card_last_four" (string of 4 digits) — routes the transaction to the
+ *     matching payment_source by card_last_four. Auto-creates a placeholder
+ *     payment_source (named "Card •• 1234") if none matches and RLS allows it.
+ *   - "is_refund" (boolean) — when true, the transaction is forced to
+ *     type=income, its notes are prefixed with "Refund:", and the is_refund
+ *     column is set so reports can separate refund income from real income.
+ *   - "client_ref" (string ≤ 128 chars) — idempotency token. If a transaction
+ *     with the same (user_id, client_ref) already exists, the existing row is
+ *     returned with mode="idempotent" instead of inserting a duplicate.
  *
  * Auth: Bearer token, session cookie, or X-API-Key header.
  */
@@ -187,6 +382,63 @@ export async function POST(request: NextRequest) {
     // --- Parse request body ---
     const body = await request.json()
 
+    // ---- New optional fields (Phase 1 Android payment automation) ----
+    // Extracted up front so they apply identically to simple and AI modes.
+
+    // is_refund: strict boolean coercion. Anything other than literal `true`
+    // is treated as false. Refunds are out of scope for the simple "dumb
+    // forwarder forwards Wallet notifications" path — we deliberately do NOT
+    // auto-detect refunds from text because the keyword overlap with normal
+    // payments ("credited to your Visa," etc.) was too noisy. Callers who
+    // genuinely need to mark a row as a refund pass `is_refund: true`
+    // explicitly and the rest of the pipeline does the right thing.
+    const isRefund: boolean = body?.is_refund === true
+
+    // The notification text we'll feed to AI in AI mode, and use right now
+    // for server-side card-last-4 extraction. Trimmed and length-capped.
+    const bodyText: string =
+      typeof body?.text === 'string' ? body.text.trim().slice(0, 2000) : ''
+
+    // card_last_four: explicit field wins; otherwise regex-detect from text so
+    // the forwarder doesn't have to parse anything itself. Patterns covered:
+    //   "Visa •• 1234"   "•• 1234"   "••1234"   "ending in 1234"
+    // Anything else stays null and the transaction lands on whichever
+    // payment_source the body or AI picks. We only infer when the field is
+    // entirely absent from the body; an explicit null/empty string stays null.
+    let cardLastFour: string | null =
+      typeof body?.card_last_four === 'string' && CARD_LAST_FOUR_RE.test(body.card_last_four)
+        ? body.card_last_four
+        : null
+    if (cardLastFour === null && body?.card_last_four === undefined && bodyText) {
+      const m = bodyText.match(/(?:••\s?|ending\s+in\s+)(\d{4})\b/i)
+      if (m) cardLastFour = m[1]
+    }
+
+    // client_ref: optional opaque idempotency token from the client. Trimmed
+    // and length-capped before any DB I/O. Lookup happens here; the DB unique
+    // index is the backstop against race conditions.
+    const clientRef: string | null =
+      typeof body?.client_ref === 'string' &&
+      body.client_ref.trim().length > 0 &&
+      body.client_ref.length <= CLIENT_REF_MAX_LENGTH
+        ? body.client_ref.trim()
+        : null
+
+    if (clientRef) {
+      const existing = await findExistingByClientRef({
+        userId: user.id,
+        clientRef,
+        accessToken,
+        apiKeyAuth,
+      })
+      if (existing) {
+        return NextResponse.json(
+          { success: true, mode: 'idempotent', data: existing },
+          { status: 200 }
+        )
+      }
+    }
+
     // Detect mode: simple (structured) when "amount" is a number, AI when "text" is provided
     const isSimpleMode = typeof body?.amount === 'number'
 
@@ -207,7 +459,7 @@ export async function POST(request: NextRequest) {
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
     let categories: { id: string; name: string }[] = []
-    let paymentSources: { id: string; name: string }[] = []
+    let paymentSources: { id: string; name: string; card_last_four?: string | null }[] = []
 
     const fetchHeaders = accessToken
       ? { 'Authorization': `Bearer ${accessToken}`, 'apikey': supabaseKey, 'Content-Type': 'application/json' }
@@ -223,7 +475,7 @@ export async function POST(request: NextRequest) {
         }
         const [catRes, srcRes] = await Promise.all([
           fetch(`${supabaseUrl}/rest/v1/categories?select=id,name&order=name`, { headers: userHeaders }),
-          fetch(`${supabaseUrl}/rest/v1/payment_sources?select=id,name&order=name`, { headers: userHeaders }),
+          fetch(`${supabaseUrl}/rest/v1/payment_sources?select=id,name,card_last_four&order=name`, { headers: userHeaders }),
         ])
         if (catRes.ok) categories = await catRes.json()
         if (srcRes.ok) paymentSources = await srcRes.json()
@@ -231,7 +483,7 @@ export async function POST(request: NextRequest) {
     } else if (fetchHeaders) {
       const [catRes, srcRes] = await Promise.all([
         fetch(`${supabaseUrl}/rest/v1/categories?select=id,name&order=name`, { headers: fetchHeaders }),
-        fetch(`${supabaseUrl}/rest/v1/payment_sources?select=id,name&order=name`, { headers: fetchHeaders }),
+        fetch(`${supabaseUrl}/rest/v1/payment_sources?select=id,name,card_last_four&order=name`, { headers: fetchHeaders }),
       ])
       if (catRes.ok) categories = await catRes.json()
       if (srcRes.ok) paymentSources = await srcRes.json()
@@ -246,7 +498,7 @@ export async function POST(request: NextRequest) {
       })
       const [catResult, srcResult] = await Promise.all([
         supabase.from('categories').select('id, name').order('name'),
-        supabase.from('payment_sources').select('id, name').order('name'),
+        supabase.from('payment_sources').select('id, name, card_last_four').order('name'),
       ])
       if (catResult.data) categories = catResult.data
       if (srcResult.data) paymentSources = srcResult.data
@@ -257,6 +509,34 @@ export async function POST(request: NextRequest) {
         { error: 'Please set up at least one category and payment source before using quick-add.' },
         { status: 400 }
       )
+    }
+
+    // ---- Resolve payment_source from card_last_four ----
+    // If the caller (typically MacroDroid parsing a Wallet notif) supplied a
+    // card last-4, that's authoritative — the user literally tapped that card.
+    // We override whatever the body/AI says about payment_source.
+    //
+    // If no existing payment_source has that card_last_four, we attempt to
+    // create one. Success → override with the new ID. Failure → leave override
+    // unset and the default-payment-source fallback in the mode branches
+    // applies (capture beats correctness).
+    let paymentSourceOverrideId: string | null = null
+    if (cardLastFour) {
+      const match = paymentSources.find(s => s.card_last_four === cardLastFour)
+      if (match) {
+        paymentSourceOverrideId = match.id
+      } else {
+        const created = await tryCreatePaymentSource({
+          userId: user.id,
+          cardLastFour,
+          accessToken,
+          apiKeyAuth,
+        })
+        if (created) {
+          paymentSourceOverrideId = created.id
+          paymentSources.push(created)
+        }
+      }
     }
 
     const today = new Date().toISOString().split('T')[0]
@@ -309,9 +589,10 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Match payment source by name (case-insensitive) or UUID; default to first
-      let paymentSourceId = paymentSources[0].id
-      if (typeof body.payment_source === 'string' && body.payment_source.trim()) {
+      // Match payment source: card_last_four override (Wallet notif) wins,
+      // then body.payment_source by name or UUID, then default to first.
+      let paymentSourceId = paymentSourceOverrideId ?? paymentSources[0].id
+      if (!paymentSourceOverrideId && typeof body.payment_source === 'string' && body.payment_source.trim()) {
         const input = body.payment_source.trim()
         const nameMatch = paymentSources.find(s => s.name.toLowerCase() === input.toLowerCase())
         if (nameMatch) paymentSourceId = nameMatch.id
@@ -380,9 +661,12 @@ Return ONLY a valid JSON object — no markdown, no explanation:
           'X-Title': 'Finance Tracker',
         },
         body: JSON.stringify({
-          model: 'openai/gpt-4o-mini',
+          model: QUICK_ADD_MODEL,
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 300,
+          // Force JSON. Reasoning models can still wrap output in prose otherwise;
+          // strict mode keeps the response a single valid JSON object.
+          response_format: { type: 'json_object' },
         }),
       })
 
@@ -410,10 +694,26 @@ Return ONLY a valid JSON object — no markdown, no explanation:
         jsonStr = jsonStr.split('```')[1].split('```')[0].trim()
       }
 
-      let parsed: Record<string, unknown>
+      let parsed: Record<string, unknown> | null = null
       try {
-        parsed = JSON.parse(jsonStr)
+        parsed = JSON.parse(jsonStr) as Record<string, unknown>
       } catch {
+        // Fallback: some models (especially reasoning-mode) wrap JSON in prose
+        // even when response_format=json_object is requested. Extract the
+        // longest plausible JSON object — first '{' through last '}' — and try
+        // again. If that also fails, give up cleanly.
+        const firstBrace = jsonStr.indexOf('{')
+        const lastBrace = jsonStr.lastIndexOf('}')
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+          try {
+            parsed = JSON.parse(jsonStr.slice(firstBrace, lastBrace + 1)) as Record<string, unknown>
+          } catch {
+            parsed = null
+          }
+        }
+      }
+
+      if (!parsed) {
         console.error('Failed to parse AI response as JSON')
         return NextResponse.json({ error: 'Failed to parse AI response. Please try again.' }, { status: 500 })
       }
@@ -442,7 +742,12 @@ Return ONLY a valid JSON object — no markdown, no explanation:
 
       // Validate category and payment_source against the fetched list — reject any AI-hallucinated IDs.
       const categoryId = categories.find(c => c.id === parsed.category)?.id ?? categories[0].id
-      const paymentSourceId = paymentSources.find(s => s.id === parsed.payment_source)?.id ?? paymentSources[0].id
+      // Payment source: card_last_four override is authoritative (Wallet told us
+      // exactly which card). Otherwise use the AI's pick, then fall back to first.
+      const paymentSourceId =
+        paymentSourceOverrideId
+        ?? paymentSources.find(s => s.id === parsed.payment_source)?.id
+        ?? paymentSources[0].id
       const notes = sanitizeHtml(typeof parsed.notes === 'string' ? parsed.notes.slice(0, 200) : null)
 
       transactionPayload = {
@@ -450,6 +755,31 @@ Return ONLY a valid JSON object — no markdown, no explanation:
         category: categoryId, payment_source: paymentSourceId,
         notes, image_url: null, user_id: user.id,
       }
+    }
+
+    // ---- Apply refund handling (post-processing for both modes) ----
+    // Refunds are stored as type='income' so the running totals balance — the
+    // user got money back. The is_refund flag lets reports separate "real
+    // income" from "refund income". Notes are prefixed so the row is also
+    // legible at a glance in the existing UI, which doesn't yet render the
+    // is_refund flag.
+    if (isRefund) {
+      transactionPayload.type = 'income'
+      const refundNote = transactionPayload.notes
+        ? `Refund: ${transactionPayload.notes}`
+        : 'Refund'
+      transactionPayload.notes = refundNote.slice(0, 200)
+    }
+
+    // Build the final insert payload — same as transactionPayload plus the new
+    // optional columns. Kept as a separate object so the existing payload
+    // construction in each mode branch stays untouched.
+    const insertPayload = {
+      ...transactionPayload,
+      is_refund: isRefund,
+      // null when no client_ref was provided — Postgres skips the partial
+      // unique index for NULL values, so legacy callers are unaffected.
+      client_ref: clientRef,
     }
 
     // --- Insert transaction ---
@@ -466,9 +796,22 @@ Return ONLY a valid JSON object — no markdown, no explanation:
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
-        body: JSON.stringify(transactionPayload),
+        body: JSON.stringify(insertPayload),
       })
       if (!insertRes.ok) {
+        // 409 with code 23505 means a concurrent retry already inserted this
+        // (user_id, client_ref). Resolve idempotently: fetch the prior row.
+        if (insertRes.status === 409 && clientRef) {
+          const existing = await findExistingByClientRef({
+            userId: user.id, clientRef, accessToken, apiKeyAuth,
+          })
+          if (existing) {
+            return NextResponse.json(
+              { success: true, mode: 'idempotent', data: existing },
+              { status: 200 }
+            )
+          }
+        }
         console.error('Supabase insert error (API key auth):', insertRes.status)
         return NextResponse.json({ error: 'Failed to save transaction. Please try again.' }, { status: 500 })
       }
@@ -483,10 +826,21 @@ Return ONLY a valid JSON object — no markdown, no explanation:
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
-        body: JSON.stringify(transactionPayload),
+        body: JSON.stringify(insertPayload),
       })
 
       if (!insertRes.ok) {
+        if (insertRes.status === 409 && clientRef) {
+          const existing = await findExistingByClientRef({
+            userId: user.id, clientRef, accessToken, apiKeyAuth,
+          })
+          if (existing) {
+            return NextResponse.json(
+              { success: true, mode: 'idempotent', data: existing },
+              { status: 200 }
+            )
+          }
+        }
         console.error('Supabase insert error:', insertRes.status)
         return NextResponse.json({ error: 'Failed to save transaction. Please try again.' }, { status: 500 })
       }
@@ -505,11 +859,24 @@ Return ONLY a valid JSON object — no markdown, no explanation:
 
       const { data, error: insertError } = await supabase
         .from('transactions')
-        .insert([transactionPayload])
+        .insert([insertPayload])
         .select()
         .single()
 
       if (insertError || !data) {
+        // PostgREST surfaces Postgres unique-violation as code '23505'.
+        // Treat it as an idempotent retry and return the existing row.
+        if (insertError?.code === PG_UNIQUE_VIOLATION && clientRef) {
+          const existing = await findExistingByClientRef({
+            userId: user.id, clientRef, accessToken, apiKeyAuth,
+          })
+          if (existing) {
+            return NextResponse.json(
+              { success: true, mode: 'idempotent', data: existing },
+              { status: 200 }
+            )
+          }
+        }
         console.error('Supabase insert error:', insertError?.message)
         return NextResponse.json({ error: 'Failed to save transaction. Please try again.' }, { status: 500 })
       }

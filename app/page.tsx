@@ -9,11 +9,12 @@ import AIChat from '@/components/AIChat'
 import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, Bot, LogOut, User, KeyRound } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, Bot, LogOut, User, KeyRound, CreditCard } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
 import ApiKeys from '@/components/ApiKeys'
+import PaymentSources from '@/components/PaymentSources'
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [showTransactionForm, setShowTransactionForm] = useState(false)
   const [showApiKeys, setShowApiKeys] = useState(false)
+  const [showPaymentSources, setShowPaymentSources] = useState(false)
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -150,6 +152,9 @@ export default function Home() {
                 <span className="hidden sm:inline">Add Transaction</span>
                 <span className="sm:hidden">Add</span>
               </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowPaymentSources(true)} title="Payment Sources">
+                <CreditCard className="h-4 w-4" />
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setShowApiKeys(true)} title="API Keys">
                 <KeyRound className="h-4 w-4" />
               </Button>
@@ -216,6 +221,15 @@ export default function Home() {
             <DialogTitle>API Keys</DialogTitle>
           </DialogHeader>
           <ApiKeys />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showPaymentSources} onOpenChange={setShowPaymentSources}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Payment Sources</DialogTitle>
+          </DialogHeader>
+          <PaymentSources />
         </DialogContent>
       </Dialog>
     </div>
