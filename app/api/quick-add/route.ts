@@ -380,7 +380,66 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Parse request body ---
-    const body = await request.json()
+    // Accept both JSON and form-urlencoded bodies. Phone-side automation tools
+    // like MacroDroid use OkHttp under the hood, which rejects non-ASCII bytes
+    // in custom string bodies (Wallet notifications routinely contain "®",
+    // "••", curly quotes, etc.). Form-urlencoded bodies are URL-encoded by the
+    // client, so non-ASCII characters travel cleanly and we re-assemble them
+    // server-side without anyone having to remember UTF-8 encoding.
+    //
+    // Wrapped in try/catch so malformed / empty bodies produce a clear 400
+    // with a hint, rather than the catch-all 500 at the bottom of the route.
+    const contentType = (request.headers.get('content-type') || '').toLowerCase()
+    let body: Record<string, unknown> = {}
+    try {
+      if (
+        contentType.includes('application/x-www-form-urlencoded') ||
+        contentType.includes('multipart/form-data')
+      ) {
+        const formData = await request.formData()
+        formData.forEach((value, key) => {
+          const str = value.toString()
+          // Coerce the few known-numeric / known-boolean fields so the rest of
+          // the route sees the same shape as JSON callers do. Everything else
+          // stays as a string — the downstream code already handles strings
+          // for text, description, category, payment_source, etc.
+          if (key === 'amount') {
+            const n = parseFloat(str)
+            body[key] = Number.isFinite(n) ? n : str
+          } else if (key === 'is_refund') {
+            body[key] = str === 'true' || str === '1'
+          } else {
+            body[key] = str
+          }
+        })
+      } else {
+        // Default path: JSON. If the body is empty or not valid JSON,
+        // request.json() throws — we catch it below and return a 400 with
+        // an actionable hint instead of an opaque 500.
+        body = await request.json()
+      }
+    } catch (parseErr) {
+      console.error(
+        'Body parse error:',
+        parseErr instanceof Error ? parseErr.message : 'Unknown error'
+      )
+      return NextResponse.json(
+        {
+          error:
+            'Could not parse request body. Send JSON ({"text":"..."}) with ' +
+            'Content-Type: application/json, OR form-encoded (text=...) with ' +
+            'Content-Type: application/x-www-form-urlencoded. The body field ' +
+            'must not be empty.',
+        },
+        { status: 400 }
+      )
+    }
+    if (typeof body !== 'object' || body === null) {
+      return NextResponse.json(
+        { error: 'Request body must be a JSON object or form-encoded data.' },
+        { status: 400 }
+      )
+    }
 
     // ---- New optional fields (Phase 1 Android payment automation) ----
     // Extracted up front so they apply identically to simple and AI modes.
@@ -443,8 +502,10 @@ export async function POST(request: NextRequest) {
     const isSimpleMode = typeof body?.amount === 'number'
 
     if (!isSimpleMode) {
-      const rawText: string = body?.text
-      if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
+      // `body.text` is `unknown` because the body parser is typed permissively;
+      // the runtime checks below narrow it to a non-empty string before use.
+      const rawText: unknown = body?.text
+      if (typeof rawText !== 'string' || rawText.trim().length === 0) {
         return NextResponse.json(
           { error: 'Request body must include either "amount" (simple mode) or "text" (AI mode).' },
           { status: 400 }
