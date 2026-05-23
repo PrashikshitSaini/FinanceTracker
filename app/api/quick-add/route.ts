@@ -1,31 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { createHash, createHmac } from 'crypto'
+import { createHash } from 'crypto'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { sanitizeHtml } from '@/lib/validation'
 
-/**
- * Signs a short-lived Supabase-compatible JWT so PostgREST treats the request
- * as coming from `userId` and applies RLS normally — without needing the user's
- * actual session token.
- */
-function signUserJwt(userId: string): string | null {
-  const secret = process.env.SUPABASE_JWT_SECRET
-  if (!secret) return null
-  const now = Math.floor(Date.now() / 1000)
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
-  const payload = Buffer.from(JSON.stringify({
-    aud: 'authenticated',
-    exp: now + 60,
-    iat: now,
-    iss: 'supabase',
-    role: 'authenticated',
-    sub: userId,
-  })).toString('base64url')
-  const sig = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')
-  return `${header}.${payload}.${sig}`
-}
+// Note: The API-key auth path used to sign a short-lived Supabase JWT
+// (`signUserJwt`) so PostgREST applied RLS as the user. That depended on
+// SUPABASE_JWT_SECRET being correctly set in production, and silently
+// produced zero-row reads when it wasn't. The path now uses the
+// service-role key and explicit user_id filters / payloads instead —
+// equivalent guarantees, one less env-var dependency.
 
 // RFC 4122 UUID v4 — used to validate user IDs returned from auth paths before use in URLs.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -99,13 +84,16 @@ async function tryCreatePaymentSource(params: {
 
   try {
     if (apiKeyAuth) {
-      const userJwt = signUserJwt(userId)
-      if (!userJwt) return null
+      // Use service-role for inserts on the API-key path. RLS is bypassed,
+      // but the payload already pins user_id = userId so the new row is
+      // properly scoped. Independent of SUPABASE_JWT_SECRET.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return null
       const res = await fetch(`${supabaseUrl}/rest/v1/payment_sources`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${userJwt}`,
-          'apikey': supabaseKey,
+          'Authorization': `Bearer ${serviceRoleKey}`,
+          'apikey': serviceRoleKey,
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
@@ -183,10 +171,14 @@ async function findExistingByClientRef(params: {
 
   try {
     if (apiKeyAuth) {
-      const userJwt = signUserJwt(userId)
-      if (!userJwt) return null
+      // Use service-role for the idempotency lookup on the API-key path. The
+      // URL above already filters by `user_id=eq.<userId>`, so even with RLS
+      // bypassed we can only see this user's rows. Independent of
+      // SUPABASE_JWT_SECRET.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return null
       const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${userJwt}`, 'apikey': supabaseKey },
+        headers: { 'Authorization': `Bearer ${serviceRoleKey}`, 'apikey': serviceRoleKey },
       })
       if (!res.ok) return null
       const rows = await res.json()
@@ -527,19 +519,45 @@ export async function POST(request: NextRequest) {
       : null
 
     if (apiKeyAuth) {
-      const userJwt = signUserJwt(user.id)
-      if (userJwt) {
-        const userHeaders = {
-          'Authorization': `Bearer ${userJwt}`,
-          'apikey': supabaseKey,
-          'Content-Type': 'application/json',
-        }
-        const [catRes, srcRes] = await Promise.all([
-          fetch(`${supabaseUrl}/rest/v1/categories?select=id,name&order=name`, { headers: userHeaders }),
-          fetch(`${supabaseUrl}/rest/v1/payment_sources?select=id,name,card_last_four&order=name`, { headers: userHeaders }),
-        ])
-        if (catRes.ok) categories = await catRes.json()
-        if (srcRes.ok) paymentSources = await srcRes.json()
+      // API-key auth path uses the service-role key for all DB ops. Service
+      // role bypasses RLS, so we apply user-scope filtering ourselves: for
+      // payment_sources we filter to (user_id IS NULL OR user_id = caller's
+      // user_id). categories is a global table — no filter needed. This makes
+      // the path independent of SUPABASE_JWT_SECRET, which previously caused
+      // silent zero-row reads when the env var was missing/wrong.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) {
+        console.error('Quick-add: SUPABASE_SERVICE_ROLE_KEY missing')
+        return NextResponse.json(
+          { error: 'Server misconfigured: SUPABASE_SERVICE_ROLE_KEY is required for API-key auth.' },
+          { status: 500 }
+        )
+      }
+      const serviceHeaders = {
+        'apikey': serviceRoleKey,
+        'Authorization': `Bearer ${serviceRoleKey}`,
+        'Content-Type': 'application/json',
+      }
+      const safeUserId = encodeURIComponent(user.id)
+      // PostgREST `or=` filter syntax: `or=(user_id.is.null,user_id.eq.<uuid>)`.
+      const [catRes, srcRes] = await Promise.all([
+        fetch(
+          `${supabaseUrl}/rest/v1/categories?select=id,name&order=name`,
+          { headers: serviceHeaders }
+        ),
+        fetch(
+          `${supabaseUrl}/rest/v1/payment_sources` +
+            `?or=(user_id.is.null,user_id.eq.${safeUserId})` +
+            `&select=id,name,card_last_four&order=name`,
+          { headers: serviceHeaders }
+        ),
+      ])
+      if (catRes.ok) categories = await catRes.json()
+      if (srcRes.ok) paymentSources = await srcRes.json()
+      if (!catRes.ok || !srcRes.ok) {
+        console.error(
+          `Quick-add (API-key): categories=${catRes.status} payment_sources=${srcRes.status}`
+        )
       }
     } else if (fetchHeaders) {
       const [catRes, srcRes] = await Promise.all([
@@ -848,12 +866,23 @@ Return ONLY a valid JSON object — no markdown, no explanation:
     let transaction = null
 
     if (apiKeyAuth) {
-      const userJwt = signUserJwt(user.id)!
+      // Use service-role for the transaction insert on the API-key path.
+      // The insertPayload already includes `user_id: user.id`, so even
+      // though RLS is bypassed the row is correctly owned. Independent of
+      // SUPABASE_JWT_SECRET.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) {
+        console.error('Quick-add: SUPABASE_SERVICE_ROLE_KEY missing on transaction insert')
+        return NextResponse.json(
+          { error: 'Server misconfigured: SUPABASE_SERVICE_ROLE_KEY is required for API-key auth.' },
+          { status: 500 }
+        )
+      }
       const insertRes = await fetch(`${supabaseUrl}/rest/v1/transactions`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${userJwt}`,
-          'apikey': supabaseKey,
+          'Authorization': `Bearer ${serviceRoleKey}`,
+          'apikey': serviceRoleKey,
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
