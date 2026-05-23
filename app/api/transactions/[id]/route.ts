@@ -532,6 +532,9 @@ Return ONLY a valid JSON object containing the fields to update. Example shapes:
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 300,
         response_format: { type: 'json_object' },
+        // Disable reasoning so max_tokens is reserved for the actual JSON
+        // patch — see quick-add for the full reasoning behind this.
+        reasoning: { enabled: false },
       }),
     })
 

@@ -175,6 +175,10 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             model: CHAT_MODEL,
             messages: messages,
+            // Disable reasoning. For chat we want fast, conversational replies
+            // — not chain-of-thought. Reasoning would also burn into our
+            // streaming/non-streaming response budget for no user benefit here.
+            reasoning: { enabled: false },
           }),
         })
 

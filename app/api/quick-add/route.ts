@@ -746,6 +746,11 @@ Return ONLY a valid JSON object — no markdown, no explanation:
           // Force JSON. Reasoning models can still wrap output in prose otherwise;
           // strict mode keeps the response a single valid JSON object.
           response_format: { type: 'json_object' },
+          // Disable reasoning. DeepSeek V4 Pro (and other reasoning models on
+          // OpenRouter) reason by default, which consumes the max_tokens budget
+          // BEFORE producing any answer — leaving choices[0].message.content
+          // empty. We don't need chain-of-thought to parse a payment notif.
+          reasoning: { enabled: false },
         }),
       })
 
@@ -762,6 +767,13 @@ Return ONLY a valid JSON object — no markdown, no explanation:
       const content: string = aiData.choices?.[0]?.message?.content
 
       if (!content) {
+        // Log the full response shape so future "no content" failures are
+        // diagnosable from Vercel runtime logs (e.g., model returned an error
+        // object, finish_reason='length', or content under a non-standard key).
+        console.error(
+          'Quick-add AI: empty content. aiData=',
+          JSON.stringify(aiData).slice(0, 1000)
+        )
         return NextResponse.json({ error: 'No response from AI model.' }, { status: 500 })
       }
 
