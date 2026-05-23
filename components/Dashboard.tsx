@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight, Edit, Trash2, Repeat, ArrowRight, Camera } from 'lucide-react'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
+import { parseLocalDate } from '@/lib/utils'
 import ReceiptScanner from '@/components/ReceiptScanner'
 
 interface DashboardProps {
@@ -127,6 +128,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                 <th className="text-left p-2">Date</th>
                 <th className="text-left p-2">Type</th>
                 <th className="text-left p-2">Category</th>
+                <th className="text-left p-2">Payment Source</th>
                 <th className="text-left p-2">Amount</th>
                 <th className="text-left p-2">Notes</th>
                 <th className="text-left p-2">Actions</th>
@@ -135,30 +137,42 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-4 text-center text-muted-foreground">
+                  <td colSpan={7} className="p-4 text-center text-muted-foreground">
                     Loading...
                   </td>
                 </tr>
               ) : transactions.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-4 text-center text-muted-foreground">
+                  <td colSpan={7} className="p-4 text-center text-muted-foreground">
                     No transactions found
                   </td>
                 </tr>
               ) : (
                 transactions.map((transaction) => (
                   <tr key={transaction.id} className="border-b hover:bg-muted/50">
-                    <td className="p-2">{format(new Date(transaction.date), 'MMM dd, yyyy')}</td>
+                    <td className="p-2 whitespace-nowrap">
+                      <div>{format(parseLocalDate(transaction.date), 'MMM dd, yyyy')}</div>
+                      {transaction.created_at && (
+                        <div className="text-xs text-muted-foreground">
+                          {format(new Date(transaction.created_at), 'h:mm a')}
+                        </div>
+                      )}
+                    </td>
                     <td className="p-2">
                       <span className={`px-2 py-1 rounded text-xs ${
-                        transaction.type === 'income' 
-                          ? 'bg-green-100 text-green-800' 
+                        transaction.type === 'income'
+                          ? 'bg-green-100 text-green-800'
                           : 'bg-red-100 text-red-800'
                       }`}>
                         {transaction.type}
                       </span>
                     </td>
                     <td className="p-2">{categoryMap[transaction.category] || transaction.category}</td>
+                    <td className="p-2 text-sm">
+                      {paymentSourceMap[transaction.payment_source] || (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="p-2 font-semibold">
                       {formatCurrency(transaction.amount, currency)}
                     </td>
@@ -354,13 +368,19 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                     key={transaction.id}
                     className="flex justify-between items-center p-2 border rounded hover:bg-muted/50"
                   >
-                    <div className="flex-1">
-                      <div className="font-medium">{categoryMap[transaction.category] || transaction.category}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {format(new Date(transaction.date), 'MMM dd')}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{categoryMap[transaction.category] || transaction.category}</div>
+                      <div className="text-sm text-muted-foreground truncate">
+                        {format(parseLocalDate(transaction.date), 'MMM dd')}
+                        {transaction.created_at && (
+                          <> &middot; {format(new Date(transaction.created_at), 'h:mm a')}</>
+                        )}
+                        {paymentSourceMap[transaction.payment_source] && (
+                          <> &middot; {paymentSourceMap[transaction.payment_source]}</>
+                        )}
                       </div>
                     </div>
-                    <div className={`font-semibold ${
+                    <div className={`font-semibold flex-shrink-0 ml-2 ${
                       transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                     }`}>
                       {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount, currency)}

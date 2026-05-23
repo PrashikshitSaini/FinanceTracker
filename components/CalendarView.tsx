@@ -10,6 +10,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { CalendarView as CalendarViewType } from '@/types'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
+import { parseLocalDate } from '@/lib/utils'
 
 export default function CalendarView() {
   const [view, setView] = useState<CalendarViewType>('month')
@@ -102,7 +103,10 @@ export default function CalendarView() {
     normalizedDate.setHours(0, 0, 0, 0)
     
     return transactions.filter(t => {
-      const tDate = new Date(t.date)
+      // parseLocalDate avoids the UTC-midnight footgun that `new Date('YYYY-MM-DD')`
+      // triggers for US (and any westward) timezones — without it, a transaction
+      // dated May 23 lands on May 22's calendar cell.
+      const tDate = parseLocalDate(t.date)
       tDate.setHours(0, 0, 0, 0)
       return isSameDay(tDate, normalizedDate)
     })
@@ -239,7 +243,8 @@ export default function CalendarView() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {months.map((month) => {
           const monthTransactions = transactions.filter(t => {
-            const tDate = new Date(t.date)
+            // Local-timezone parse: see comment in getTransactionsForDate.
+            const tDate = parseLocalDate(t.date)
             return isSameMonth(tDate, month)
           })
           const monthIncome = monthTransactions
