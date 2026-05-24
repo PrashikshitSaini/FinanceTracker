@@ -11,6 +11,7 @@ import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
 import { parseLocalDate } from '@/lib/utils'
 import ReceiptScanner from '@/components/ReceiptScanner'
+import CategoryPieChart from '@/components/CategoryPieChart'
 
 interface DashboardProps {
   showTableOnly?: boolean
@@ -326,29 +327,7 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
             <CardTitle>Expenses by Category</CardTitle>
           </CardHeader>
           <CardContent>
-            {categoryData.length === 0 ? (
-              <p className="text-muted-foreground">No expenses this month</p>
-            ) : (
-              <div className="space-y-4">
-                {categoryData.map((item) => {
-                  const percentage = (item.amount / totalExpenses) * 100
-                  return (
-                    <div key={item.category} className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span>{item.category}</span>
-                        <span className="font-semibold">{formatCurrency(item.amount, currency)}</span>
-                      </div>
-                      <div className="w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-primary h-2 rounded-full transition-all"
-                          style={{ width: `${percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            <CategoryPieChart data={categoryData} total={totalExpenses} />
           </CardContent>
         </Card>
 
@@ -362,8 +341,12 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
             ) : transactions.length === 0 ? (
               <p className="text-muted-foreground">No transactions this month</p>
             ) : (
-              <div className="space-y-2">
-                {transactions.slice(0, 5).map((transaction) => (
+              // Up to 15 most-recent transactions, scrollable inside the card
+              // so the card height stays predictable next to the pie chart
+              // alongside it. max-h sized to fit ~5 rows comfortably before
+              // scroll kicks in; the rest scrolls inside the container.
+              <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                {transactions.slice(0, 15).map((transaction) => (
                   <div
                     key={transaction.id}
                     className="flex justify-between items-center p-2 border rounded hover:bg-muted/50"

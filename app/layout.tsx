@@ -2,12 +2,17 @@ import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { CurrencyProvider } from "@/contexts/CurrencyContext"
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Finance Tracker",
   description: "Track your finances with AI-powered insights",
+  // Linking the manifest enables PWA install on supported browsers.
+  // The companion service worker (registered below in <head>) provides the
+  // fetch handler Chrome on Android requires before offering "Install app".
+  manifest: '/manifest.webmanifest',
   icons: {
     icon: [
       { url: '/wallet-icon.svg', type: 'image/svg+xml' },
@@ -16,12 +21,21 @@ export const metadata: Metadata = {
     ],
     apple: '/icon.png',
   },
+  // Tell mobile Safari this app can run in fullscreen / standalone mode when
+  // launched from a home-screen icon. Android Chrome reads this from the
+  // manifest's `display: standalone`, so this is iOS-specific.
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Finance',
+  },
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 5,
+  themeColor: '#0a0a0a',
 }
 
 export default function RootLayout({
@@ -32,6 +46,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={inter.className}>
+        {/* Side-effect component: registers /sw.js so Chrome upgrades the
+            install affordance from "Add to Home Screen" to "Install app". */}
+        <ServiceWorkerRegister />
         <CurrencyProvider>
           {children}
         </CurrencyProvider>

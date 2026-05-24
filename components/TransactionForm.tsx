@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase'
 import { Camera, Image as ImageIcon, X } from 'lucide-react'
 import ImageUpload from './ImageUpload'
 import { Transaction } from '@/types'
+import { getLocalTodayISO } from '@/lib/utils'
 
 interface TransactionFormProps {
   open: boolean
@@ -24,7 +25,7 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
   const [paymentSource, setPaymentSource] = useState('')
   const [notes, setNotes] = useState('')
   const [type, setType] = useState<'income' | 'expense'>('expense')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate] = useState(getLocalTodayISO())
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([])
   const [paymentSources, setPaymentSources] = useState<{ id: string; name: string }[]>([])
@@ -65,7 +66,7 @@ export default function TransactionForm({ open, onOpenChange, transaction }: Tra
     setPaymentSource('')
     setNotes('')
     setType('expense')
-    setDate(new Date().toISOString().split('T')[0])
+    setDate(getLocalTodayISO())
     setImageUrl(null)
     setErrors({})
   }

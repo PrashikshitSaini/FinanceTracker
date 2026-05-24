@@ -25,3 +25,23 @@ export function parseLocalDate(dateString: string): Date {
   return new Date(dateString)
 }
 
+/**
+ * Return today's date as a YYYY-MM-DD string in the browser's LOCAL timezone.
+ *
+ * The naive `new Date().toISOString().split('T')[0]` returns UTC today, which
+ * for any US (or other westward) timezone past ~5 PM is *tomorrow's* date.
+ * That bug surfaces as transactions created in the evening being filed under
+ * the next calendar day in the user's view. This helper uses the local
+ * year/month/day components instead.
+ *
+ * Use this anywhere a "today" default needs to match what the user sees on
+ * their phone/wall clock.
+ */
+export function getLocalTodayISO(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+

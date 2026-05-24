@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Camera, Image as ImageIcon, X, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useCurrency } from '@/contexts/CurrencyContext'
+import { getLocalTodayISO } from '@/lib/utils'
 
 interface ReceiptScannerProps {
   open: boolean
@@ -172,8 +173,9 @@ export default function ReceiptScanner({ open, onOpenChange, onTransactionAdded 
       // Clear the image from memory immediately after processing
       removeImage()
 
-      // Use today's date to ensure transaction appears in current month view immediately.
-      const today = new Date().toISOString().split('T')[0]
+      // Use today's date (in the user's LOCAL timezone, not UTC) so the row
+      // lands in the calendar / month view that matches their wall clock.
+      const today = getLocalTodayISO()
 
       // Route through the validated API endpoint so all server-side checks (UUID validation,
       // amount bounds, notes sanitization) are applied consistently regardless of entry path.
