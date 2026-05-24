@@ -3,6 +3,7 @@ import { Inter } from "next/font/google"
 import "./globals.css"
 import { CurrencyProvider } from "@/contexts/CurrencyContext"
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister"
+import TimezoneSync from "@/components/TimezoneSync"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -49,6 +50,11 @@ export default function RootLayout({
         {/* Side-effect component: registers /sw.js so Chrome upgrades the
             install affordance from "Add to Home Screen" to "Install app". */}
         <ServiceWorkerRegister />
+        {/* Side-effect component: syncs the browser's IANA timezone to the
+            user's Supabase metadata so server-side "today" calculations match
+            the user's wall clock — fixes evening transactions landing on the
+            next calendar day. */}
+        <TimezoneSync />
         <CurrencyProvider>
           {children}
         </CurrencyProvider>

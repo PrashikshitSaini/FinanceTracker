@@ -9,7 +9,7 @@ import AIChat from '@/components/AIChat'
 import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, Bot, LogOut, User, KeyRound, CreditCard } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, Bot, LogOut, User, KeyRound, CreditCard, FileDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
@@ -154,6 +154,14 @@ export default function Home() {
               </Button>
               <Button variant="outline" size="sm" onClick={() => setShowPaymentSources(true)} title="Payment Sources">
                 <CreditCard className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open('/statement', '_blank', 'noopener')}
+                title="Export Monthly Statement"
+              >
+                <FileDown className="h-4 w-4" />
               </Button>
               <Button variant="outline" size="sm" onClick={() => setShowApiKeys(true)} title="API Keys">
                 <KeyRound className="h-4 w-4" />

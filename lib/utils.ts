@@ -45,3 +45,34 @@ export function getLocalTodayISO(): string {
   return `${y}-${m}-${day}`
 }
 
+/**
+ * Return today's date as YYYY-MM-DD in the given IANA timezone (e.g.
+ * "America/Chicago", "Asia/Kolkata"). Falls back gracefully to UTC if the
+ * timezone string is missing or invalid.
+ *
+ * Used server-side to compute "today" for a specific user — Node on Vercel
+ * runs in UTC, which produces off-by-one date defaults for any westward user
+ * past ~5 PM local time. Pulling the user's timezone from their
+ * `user_metadata.timezone` (set by the web client at login) lets the server
+ * resolve "today" the same way the user's wall clock would.
+ *
+ * Uses 'en-CA' locale because it formats dates as YYYY-MM-DD by default —
+ * matches the format the rest of the app expects.
+ */
+export function todayInTimezone(timeZone?: string | null): string {
+  if (!timeZone) {
+    return new Date().toISOString().split('T')[0]
+  }
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+  } catch {
+    // Unknown/invalid IANA zone — fall back to UTC rather than crash the request.
+    return new Date().toISOString().split('T')[0]
+  }
+}
+

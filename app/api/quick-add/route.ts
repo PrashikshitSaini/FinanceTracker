@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { createHash } from 'crypto'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { sanitizeHtml } from '@/lib/validation'
+import { todayInTimezone } from '@/lib/utils'
 
 // Note: The API-key auth path used to sign a short-lived Supabase JWT
 // (`signUserJwt`) so PostgREST applied RLS as the user. That depended on
@@ -618,7 +619,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    // Compute "today" in the user's local timezone (stored in user_metadata
+    // by the web client's TimezoneSync on every login). Falls back to UTC if
+    // the user has never logged into the web app — keeps backward compat for
+    // hypothetical API-key-only callers, but the web-app sync covers the
+    // common MacroDroid case.
+    const userTimezone =
+      (user as { user_metadata?: { timezone?: string } } | null)?.user_metadata?.timezone
+    const today = todayInTimezone(userTimezone)
 
     // Both modes produce a transactionPayload; only insertion logic follows.
     let transactionPayload: {

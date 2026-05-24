@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { receiptExtractionSchema } from '@/lib/validation'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { todayInTimezone } from '@/lib/utils'
 
 // Vercel's default body limit is 4.5 MB, but enforce explicitly here so any future
 // runtime change doesn't silently open a large-payload vector for token exhaustion.
@@ -215,10 +216,16 @@ export async function POST(request: NextRequest) {
     const categoriesList = categories.map(c => `- ${c.name} (ID: ${c.id})`).join('\n')
     const sourcesList = paymentSources.map(s => `- ${s.name} (ID: ${s.id})`).join('\n')
 
+    // "Today" computed in the user's local timezone (from user_metadata,
+    // populated by the web client's TimezoneSync). Falls back to UTC if not
+    // set — see todayInTimezone() comment for the why.
+    const userTimezone = (user as { user_metadata?: { timezone?: string } })?.user_metadata?.timezone
+    const today = todayInTimezone(userTimezone)
+
     const prompt = `You are a receipt scanning assistant. Analyze this receipt image and extract the following information:
 
 1. **Total amount** (required) - Extract the total amount paid
-2. **Date** (optional) - Extract the transaction date from the receipt. If not found, use today's date: ${new Date().toISOString().split('T')[0]}
+2. **Date** (optional) - Extract the transaction date from the receipt. If not found, use today's date: ${today}
 3. **Category** (required) - Match the merchant/store name or items purchased to the most appropriate category from this list:
 ${categoriesList}
 
@@ -241,7 +248,7 @@ If you cannot extract required fields, use these defaults:
 - amount: 0 (user will need to correct)
 - category: first category ID from the list
 - payment_source: first payment source ID from the list
-- date: ${new Date().toISOString().split('T')[0]}
+- date: ${today}
 - notes: null`
 
     // Call OpenRouter API with vision model
@@ -346,7 +353,7 @@ If you cannot extract required fields, use these defaults:
       amount: typeof parsedData.amount === 'number' ? parsedData.amount : 0,
       category: validCategoryId,
       payment_source: validPaymentSourceId,
-      date: parsedData.date || new Date().toISOString().split('T')[0],
+      date: parsedData.date || today,
       notes: parsedData.notes || null,
     }
 
