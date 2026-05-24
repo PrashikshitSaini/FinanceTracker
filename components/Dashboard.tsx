@@ -22,8 +22,12 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [loading, setLoading] = useState(true)
   const [categoryMap, setCategoryMap] = useState<Record<string, string>>({})
+  const [categories, setCategories] = useState<{ id: string; name: string }[]>([])
   const [paymentSourceMap, setPaymentSourceMap] = useState<Record<string, string>>({})
   const [showReceiptScanner, setShowReceiptScanner] = useState(false)
+  // Per-row "saving" indicator for the category dropdown — disables the select
+  // for the row currently being updated to prevent double-fires.
+  const [updatingCategoryId, setUpdatingCategoryId] = useState<string | null>(null)
   const { currency } = useCurrency()
 
   useEffect(() => {
@@ -38,8 +42,11 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
     ])
 
     if (categoriesResult.data) {
+      // Sort alphabetically so the inline dropdown order is predictable.
+      const sorted = [...categoriesResult.data].sort((a, b) => a.name.localeCompare(b.name))
+      setCategories(sorted)
       const map: Record<string, string> = {}
-      categoriesResult.data.forEach(cat => {
+      sorted.forEach(cat => {
         map[cat.id] = cat.name
       })
       setCategoryMap(map)
@@ -75,6 +82,44 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
       setTransactions(data || [])
     }
     setLoading(false)
+  }
+
+  /**
+   * Inline-edit a transaction's category. The change cascades through the
+   * shared `transactions` state, so the pie chart, recent-transactions card,
+   * totals, and any opened statement page all reflect the new category
+   * without an extra refetch. RLS in the DB enforces that the user can only
+   * update their own rows; we don't need an extra ownership check here.
+   *
+   * Optimistic: state flips immediately. On API error we revert and show an
+   * alert (matching the existing deleteTransaction UX).
+   */
+  const updateTransactionCategory = async (transactionId: string, newCategoryId: string) => {
+    const previous = transactions.find(t => t.id === transactionId)?.category
+    if (!previous || previous === newCategoryId) return
+
+    setUpdatingCategoryId(transactionId)
+    setTransactions(prev =>
+      prev.map(t => (t.id === transactionId ? { ...t, category: newCategoryId } : t))
+    )
+
+    const { error } = await supabase
+      .from('transactions')
+      .update({ category: newCategoryId })
+      .eq('id', transactionId)
+
+    setUpdatingCategoryId(null)
+
+    if (error) {
+      // Revert the optimistic change so the UI matches DB state.
+      setTransactions(prev =>
+        prev.map(t => (t.id === transactionId ? { ...t, category: previous } : t))
+      )
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Update category error:', error.message || 'Unknown error')
+      }
+      alert('Failed to update category. Please try again.')
+    }
   }
 
   const deleteTransaction = async (id: string) => {
@@ -168,7 +213,28 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                         {transaction.type}
                       </span>
                     </td>
-                    <td className="p-2">{categoryMap[transaction.category] || transaction.category}</td>
+                    <td className="p-2">
+                      <select
+                        value={transaction.category}
+                        onChange={e => updateTransactionCategory(transaction.id, e.target.value)}
+                        disabled={updatingCategoryId === transaction.id}
+                        aria-label="Change category"
+                        className="bg-background border border-input rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-w-[180px] disabled:opacity-50"
+                      >
+                        {/* Fallback: if the current category isn't in the list
+                            (e.g., row's category was deleted globally), show
+                            it as a non-recoverable option so we don't display
+                            a blank select. */}
+                        {!categories.some(c => c.id === transaction.category) && (
+                          <option value={transaction.category}>
+                            {categoryMap[transaction.category] || transaction.category}
+                          </option>
+                        )}
+                        {categories.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="p-2 text-sm">
                       {paymentSourceMap[transaction.payment_source] || (
                         <span className="text-muted-foreground">—</span>
