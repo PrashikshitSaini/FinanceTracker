@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { Suspense, useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Transaction } from '@/types'
@@ -28,7 +28,31 @@ import { parseLocalDate } from '@/lib/utils'
  * consistent column ordering and no purely-decorative content.
  */
 
+/**
+ * Outer page = thin Suspense wrapper. Required because StatementContent uses
+ * `useSearchParams()`, which Next.js 14 forces under a Suspense boundary in
+ * order to support static prerendering — without it `next build` fails with
+ * "useSearchParams() should be wrapped in a suspense boundary". The wrapper
+ * pattern lets the page prerender a fallback shell while the client hydrates
+ * the URL-dependent content.
+ */
 export default function StatementPage() {
+  return (
+    <Suspense fallback={<StatementLoading />}>
+      <StatementContent />
+    </Suspense>
+  )
+}
+
+function StatementLoading() {
+  return (
+    <div className="bg-white text-black min-h-screen flex items-center justify-center">
+      <p className="text-gray-500 text-sm">Loading statement…</p>
+    </div>
+  )
+}
+
+function StatementContent() {
   const searchParams = useSearchParams()
   const { currency } = useCurrency()
 

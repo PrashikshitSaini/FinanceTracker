@@ -9,12 +9,13 @@ import AIChat from '@/components/AIChat'
 import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, Bot, LogOut, User, KeyRound, CreditCard, FileDown } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, Bot, LogOut, User } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
 import ApiKeys from '@/components/ApiKeys'
 import PaymentSources from '@/components/PaymentSources'
+import HeaderMoreMenu from '@/components/HeaderMoreMenu'
 import {
   Dialog,
   DialogContent,
@@ -152,21 +153,14 @@ export default function Home() {
                 <span className="hidden sm:inline">Add Transaction</span>
                 <span className="sm:hidden">Add</span>
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowPaymentSources(true)} title="Payment Sources">
-                <CreditCard className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open('/statement', '_blank', 'noopener')}
-                title="Export Monthly Statement"
-              >
-                <FileDown className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowApiKeys(true)} title="API Keys">
-                <KeyRound className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" onClick={handleSignOut} size="sm">
+              {/* Secondary actions (Payment Sources, Export Statement,
+                  API Keys) collapsed into a labeled dropdown so they're
+                  findable by name on every screen size. */}
+              <HeaderMoreMenu
+                onOpenPaymentSources={() => setShowPaymentSources(true)}
+                onOpenApiKeys={() => setShowApiKeys(true)}
+              />
+              <Button variant="outline" onClick={handleSignOut} size="sm" title="Sign out">
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>

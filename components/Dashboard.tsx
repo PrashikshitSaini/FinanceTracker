@@ -12,6 +12,7 @@ import { formatCurrency } from '@/lib/currency'
 import { parseLocalDate } from '@/lib/utils'
 import ReceiptScanner from '@/components/ReceiptScanner'
 import CategoryPieChart from '@/components/CategoryPieChart'
+import TransactionForm from '@/components/TransactionForm'
 
 interface DashboardProps {
   showTableOnly?: boolean
@@ -28,6 +29,11 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
   // Per-row "saving" indicator for the category dropdown — disables the select
   // for the row currently being updated to prevent double-fires.
   const [updatingCategoryId, setUpdatingCategoryId] = useState<string | null>(null)
+  // Transaction currently being edited via the Edit pencil button. The
+  // existing TransactionForm component accepts an optional `transaction` prop
+  // and re-uses the same form for both add and edit flows, so we just hand
+  // it a transaction and open it.
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
   const { currency } = useCurrency()
 
   useEffect(() => {
@@ -251,9 +257,8 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => {
-                            // TODO: Open edit form
-                          }}
+                          onClick={() => setEditingTransaction(transaction)}
+                          title="Edit transaction"
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -272,6 +277,20 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
             </tbody>
           </table>
         </div>
+        {/* Edit dialog — opens when the pencil icon is clicked on a row.
+            TransactionForm is the same component used for Add, just primed
+            with the existing transaction's values. We refresh on close so
+            edits propagate to the pie chart, totals, etc. */}
+        <TransactionForm
+          open={editingTransaction !== null}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) {
+              setEditingTransaction(null)
+              loadTransactions()
+            }
+          }}
+          transaction={editingTransaction ?? undefined}
+        />
       </div>
     )
   }
@@ -449,6 +468,18 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
           loadTransactions()
           loadCategoriesAndSources()
         }}
+      />
+      {/* Edit dialog for the full-dashboard view — also used by inline pencil
+          icon if the user ever lands here. Refreshes data on close. */}
+      <TransactionForm
+        open={editingTransaction !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setEditingTransaction(null)
+            loadTransactions()
+          }
+        }}
+        transaction={editingTransaction ?? undefined}
       />
     </div>
   )
