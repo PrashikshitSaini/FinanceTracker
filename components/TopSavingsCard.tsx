@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Target, ArrowRight, PartyPopper } from 'lucide-react'
@@ -32,21 +32,40 @@ export default function TopSavingsCard({ onViewAll }: TopSavingsCardProps) {
   const [plans, setPlans] = useState<SavingsPlan[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Reusable loader. Each caller passes an `isActive()` predicate so it can
+  // bail out before applying state updates if its scope was already torn
+  // down (e.g., unmount, or the next event-driven refetch starting).
+  const load = useCallback(async (isActive: () => boolean) => {
+    const { data } = await supabase
+      .from('savings_plans')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .limit(3)
+    if (!isActive()) return
+    setPlans((data as SavingsPlan[]) ?? [])
+    setLoading(false)
+  }, [])
+
+  // Initial fetch — cancellable on unmount.
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      const { data } = await supabase
-        .from('savings_plans')
-        .select('*')
-        .order('updated_at', { ascending: false })
-        .limit(3)
-      if (cancelled) return
-      setPlans((data as SavingsPlan[]) ?? [])
-      setLoading(false)
-    }
-    load()
+    load(() => !cancelled)
     return () => { cancelled = true }
-  }, [])
+  }, [load])
+
+  // Mirror the Savings tab: re-fetch when Finn mutates plans. Each handler
+  // call runs in its own scope, so we use a fresh `cancelled` flag — the
+  // useEffect cleanup tears down the listener AND signals any in-flight
+  // fetch from the previous handler to abandon its state update.
+  useEffect(() => {
+    let cancelled = false
+    const handler = () => { load(() => !cancelled) }
+    window.addEventListener('finn:savings-changed', handler)
+    return () => {
+      cancelled = true
+      window.removeEventListener('finn:savings-changed', handler)
+    }
+  }, [load])
 
   // Hide the card entirely while loading (no flash) and when empty.
   // No saved goals = no point showing a half-empty placeholder.

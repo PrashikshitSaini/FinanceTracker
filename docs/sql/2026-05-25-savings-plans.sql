@@ -6,16 +6,17 @@
 -- target amount, an accumulated `saved_amount`, an optional target date, and
 -- optional free-text notes. Contributions are recorded by bumping
 -- `saved_amount` directly (no separate ledger table for v1 — keep the model
--- thin; a contributions sub-table can come later if the user wants history).
+-- thin; a contributions sub-table can come later if you want history).
 --
 -- Decoupled from `transactions`: contributing to a goal does NOT auto-create
 -- an expense row. The two are tracked independently, by design — the user
 -- can manually log a transaction if they want it in their cashflow too.
 --
--- RLS: strict per-user (no shared/legacy rows here since the table is new).
--- Mirrors the policy shape we used for the per-user side of payment_sources.
+-- RLS: strict per-user.
 --
--- Idempotent: safe to re-run.
+-- NON-DESTRUCTIVE: every CREATE is guarded behind a `NOT EXISTS` check or
+-- uses `IF NOT EXISTS`. Re-running this script is a no-op; nothing is ever
+-- dropped or overwritten. Safe to re-run any number of times.
 -- =============================================================================
 
 BEGIN;
@@ -47,29 +48,55 @@ CREATE INDEX IF NOT EXISTS savings_plans_user_updated_idx
   ON public.savings_plans (user_id, updated_at DESC);
 
 -- -----------------------------------------------------------------------------
--- 3. Auto-bump updated_at on UPDATE
+-- 3. updated_at auto-bump function + trigger
 -- -----------------------------------------------------------------------------
 -- The dashboard widget sorts by updated_at to surface recently-active goals.
--- Bumping it whenever ANY column changes (contribution, rename, target tweak)
--- keeps that ordering meaningful. A BEFORE UPDATE trigger handles it without
--- the app having to remember to set updated_at on every PATCH.
+-- The trigger bumps it whenever any column changes (contribution, rename,
+-- target tweak), so the app doesn't have to remember to set updated_at on
+-- every PATCH.
+--
+-- Both the function and the trigger are created ONLY IF THEY DON'T EXIST —
+-- no DROP, no REPLACE. If someone has already customized either, this
+-- migration leaves their version alone.
 
-CREATE OR REPLACE FUNCTION public.savings_plans_set_updated_at()
-RETURNS TRIGGER AS $$
+DO $$
 BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = 'savings_plans_set_updated_at'
+      AND n.nspname = 'public'
+  ) THEN
+    CREATE FUNCTION public.savings_plans_set_updated_at()
+    RETURNS TRIGGER AS $fn$
+    BEGIN
+      NEW.updated_at = now();
+      RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+  END IF;
+END $$;
 
-DROP TRIGGER IF EXISTS savings_plans_set_updated_at_trg ON public.savings_plans;
-CREATE TRIGGER savings_plans_set_updated_at_trg
-  BEFORE UPDATE ON public.savings_plans
-  FOR EACH ROW EXECUTE FUNCTION public.savings_plans_set_updated_at();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_trigger
+    WHERE tgname = 'savings_plans_set_updated_at_trg'
+      AND tgrelid = 'public.savings_plans'::regclass
+  ) THEN
+    CREATE TRIGGER savings_plans_set_updated_at_trg
+      BEFORE UPDATE ON public.savings_plans
+      FOR EACH ROW EXECUTE FUNCTION public.savings_plans_set_updated_at();
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- 4. RLS — strict per-user
 -- -----------------------------------------------------------------------------
+-- ENABLE ROW LEVEL SECURITY is idempotent (no-op if already enabled).
+-- Each policy is created only if missing.
 
 ALTER TABLE public.savings_plans ENABLE ROW LEVEL SECURITY;
 
@@ -102,12 +129,3 @@ DO $$ BEGIN
 END $$;
 
 COMMIT;
-
--- =============================================================================
--- ROLLBACK
--- =============================================================================
--- BEGIN;
---   DROP TRIGGER IF EXISTS savings_plans_set_updated_at_trg ON public.savings_plans;
---   DROP FUNCTION IF EXISTS public.savings_plans_set_updated_at();
---   DROP TABLE IF EXISTS public.savings_plans;
--- COMMIT;

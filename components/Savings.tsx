@@ -81,6 +81,15 @@ export default function Savings() {
     fetchPlans()
   }, [fetchPlans])
 
+  // Refresh when Finn (the AI bubble) takes an action that mutates plans.
+  // The bubble dispatches `finn:savings-changed` after a successful tool call
+  // so any visible savings view picks up the change without a hard reload.
+  useEffect(() => {
+    const handler = () => fetchPlans()
+    window.addEventListener('finn:savings-changed', handler)
+    return () => window.removeEventListener('finn:savings-changed', handler)
+  }, [fetchPlans])
+
   // ─── Form helpers ──────────────────────────────────────────────────────────
 
   const resetForm = () => {
