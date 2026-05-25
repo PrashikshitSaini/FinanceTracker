@@ -230,9 +230,16 @@ async function findExistingByClientRef(params: {
  *   { "text": "Spent 20.84 on Chipotle" }
  *
  * Optional fields shared by both modes (added for Android payment automation):
+ *   - "source_app" (string ≤ 100 chars) — name of the originating app
+ *     (e.g., "Cash App", "Venmo", "Google Wallet"). When supplied, the server
+ *     tries to match it case-insensitively against the user's payment_source
+ *     names first. This handles non-card sources like Cash App that don't
+ *     have a card_last_four. Falls through to card_last_four matching if no
+ *     name match is found.
  *   - "card_last_four" (string of 4 digits) — routes the transaction to the
  *     matching payment_source by card_last_four. Auto-creates a placeholder
  *     payment_source (named "Card •• 1234") if none matches and RLS allows it.
+ *     Used as a fallback after source_app matching.
  *   - "is_refund" (boolean) — when true, the transaction is forced to
  *     type=income, its notes are prefixed with "Refund:", and the is_refund
  *     column is set so reports can separate refund income from real income.
@@ -466,6 +473,16 @@ export async function POST(request: NextRequest) {
       if (m) cardLastFour = m[1]
     }
 
+    // source_app: name of the originating app from the phone (e.g., "Cash
+    // App", "Google Wallet"). MacroDroid's `[app_name]` magic text returns
+    // the human-readable app name, which we match case-insensitively against
+    // the user's payment_source names. Length-capped to keep the matching
+    // loop bounded; trimmed of whitespace.
+    const sourceApp: string | null =
+      typeof body?.source_app === 'string' && body.source_app.trim().length > 0
+        ? body.source_app.trim().slice(0, 100)
+        : null
+
     // client_ref: optional opaque idempotency token from the client. Trimmed
     // and length-capped before any DB I/O. Lookup happens here; the DB unique
     // index is the backstop against race conditions.
@@ -591,17 +608,30 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // ---- Resolve payment_source from card_last_four ----
-    // If the caller (typically MacroDroid parsing a Wallet notif) supplied a
-    // card last-4, that's authoritative — the user literally tapped that card.
-    // We override whatever the body/AI says about payment_source.
-    //
-    // If no existing payment_source has that card_last_four, we attempt to
-    // create one. Success → override with the new ID. Failure → leave override
-    // unset and the default-payment-source fallback in the mode branches
-    // applies (capture beats correctness).
+    // ---- Resolve payment_source ----
+    // Resolution priority:
+    //   1. source_app name match (e.g., "Cash App" → payment_source named
+    //      "Cash App"). Handles non-card sources cleanly.
+    //   2. card_last_four match against payment_sources.card_last_four
+    //      (Google Wallet's "Visa •• 1234" routes to the matching card).
+    //   3. card_last_four with no existing match → auto-create a placeholder
+    //      payment_source named "Card •• 1234" (best effort; tolerates RLS
+    //      failure).
+    //   4. None of the above → leave override unset; the simple/AI mode branch
+    //      below falls back to the user's first payment source.
     let paymentSourceOverrideId: string | null = null
-    if (cardLastFour) {
+
+    // Priority 1: source_app name match.
+    if (sourceApp) {
+      const sourceAppLower = sourceApp.toLowerCase()
+      const appMatch = paymentSources.find(
+        s => s.name.toLowerCase() === sourceAppLower
+      )
+      if (appMatch) paymentSourceOverrideId = appMatch.id
+    }
+
+    // Priority 2 & 3: card_last_four (only if source_app didn't already win).
+    if (!paymentSourceOverrideId && cardLastFour) {
       const match = paymentSources.find(s => s.card_last_four === cardLastFour)
       if (match) {
         paymentSourceOverrideId = match.id

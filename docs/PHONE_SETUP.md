@@ -51,11 +51,13 @@ Open MacroDroid → **Add Macro** (+ button) → name it **`Wallet Auto-Log`**.
   - `Content-Type: application/json`
   - `X-API-Key: ftqa_...` (paste your full key)
 - **Body type:** `Custom (Text)`
-- **Body** (copy this exactly):
-  ```json
-  {"text": "[notification_title]: [notification_text]"}
+- **Body** (form-encoded — uses `&` to separate fields, MacroDroid auto-URL-encodes the values):
   ```
-  The `[notification_title]` and `[notification_text]` are MacroDroid's magic-text placeholders for the notification's title and body. Insert them via the magic-text picker (the {} icon in the body field) so they substitute at runtime.
+  text=[notification_title]: [notification_text]&source_app=[app_name]
+  ```
+  The placeholders `[notification_title]`, `[notification_text]`, and `[app_name]` are MacroDroid's magic-text — insert them via the magic-text picker (the `…` icon next to the body field) so they substitute at runtime.
+
+  **`source_app` lets you route by app, not by card.** When the server sees `source_app=Cash App`, it looks for a payment_source named exactly `Cash App` and routes the transaction there. Useful for non-card sources (Cash App, Venmo, Zelle, etc.) where the notification doesn't carry a card last-4. Falls back to the `card_last_four` regex if no name match — so Google Wallet payments still route by card.
 
 Save the macro. **That's the whole setup.**
 
