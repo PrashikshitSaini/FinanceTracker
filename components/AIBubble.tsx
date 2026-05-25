@@ -37,11 +37,40 @@ interface Message {
 }
 
 const INSIGHT_CACHE_KEY = 'aibubble-insight-v1'
-const INSIGHT_TTL_HOURS = 6 // re-generate proactive insight at most every 6 hours
+// Short TTL so the user sees a fresh angle within minutes if they reload —
+// the model gets a new randomly-picked angle each time, so variety only
+// matters if we actually re-fetch. 30 minutes balances cost vs. surprise.
+const INSIGHT_TTL_MINUTES = 30
 
 interface CachedInsight {
   text: string
   generated_at: number
+}
+
+/**
+ * Catalog of "angles" the proactive insight can take. One is picked at random
+ * for each fetch — without this, the model gravitates to the same observation
+ * every time because the underlying data is the same. Forcing a different
+ * lens each call surfaces different facets of the user's finances.
+ *
+ * Add more angles to expand the rotation. Each entry is a direct instruction
+ * the prompt embeds verbatim.
+ */
+const INSIGHT_ANGLES = [
+  'a surprising spending pattern — something that contrasts or stands out',
+  'a savings-goal cheerleader moment — celebrate or encourage progress',
+  'a category trend — how spending in one area changed recently',
+  'one tiny actionable tip specific to their data — be concrete, not generic',
+  'a celebration of something they did well this month',
+  'a "did you know" fact about their own numbers',
+  'a forward-looking nudge — something to consider for the rest of the month',
+  'a playful comparison between two categories (e.g., "X is more than Y")',
+  'a question that prompts them to reflect on a specific transaction',
+  'a small win they may not have noticed',
+] as const
+
+function pickRandomAngle(): string {
+  return INSIGHT_ANGLES[Math.floor(Math.random() * INSIGHT_ANGLES.length)]
 }
 
 export default function AIBubble() {
@@ -154,13 +183,13 @@ export default function AIBubble() {
     let cancelled = false
 
     async function fetchInsight() {
-      // localStorage cache — keeps us from generating a fresh insight on
-      // every page nav within the TTL.
+      // localStorage cache — short TTL, so a reload within ~30 min reuses
+      // the prior insight (saves an API call) but later visits get fresh ones.
       try {
         const raw = localStorage.getItem(INSIGHT_CACHE_KEY)
         if (raw) {
           const cached: CachedInsight = JSON.parse(raw)
-          if (Date.now() - cached.generated_at < INSIGHT_TTL_HOURS * 60 * 60 * 1000) {
+          if (Date.now() - cached.generated_at < INSIGHT_TTL_MINUTES * 60 * 1000) {
             if (!cancelled) setInsight(cached.text)
             return
           }
@@ -171,6 +200,7 @@ export default function AIBubble() {
       if (!session?.access_token) return
 
       const context = await buildSystemContext()
+      const angle = pickRandomAngle()
 
       const res = await fetch('/api/ai-chat', {
         method: 'POST',
@@ -183,7 +213,10 @@ export default function AIBubble() {
             {
               role: 'user',
               content:
-                'Give me ONE short, friendly observation about my finances right now — something I might not have noticed. Maximum 25 words, one line. Don\'t use tools, just talk.',
+                `Give me ONE short, friendly observation about my finances right now. ` +
+                `Take this specific angle: ${angle}. ` +
+                `Make it FRESH and specific to my actual numbers — never use generic finance-advice clichés. ` +
+                `Maximum 25 words, one line, casual like texting a friend. Don't use tools, just talk.`,
             },
           ],
           system_context: context,
@@ -232,6 +265,9 @@ export default function AIBubble() {
   const dismissInsight = () => {
     setInsight(null)
     setInsightDismissed(true)
+    // Wipe the cache so the next session (or page reload) generates a fresh
+    // angle rather than re-showing the one the user just dismissed.
+    try { localStorage.removeItem(INSIGHT_CACHE_KEY) } catch { /* ignore */ }
   }
 
   // ─── Send a message ───────────────────────────────────────────────────────
