@@ -26,3 +26,20 @@ export interface PaymentSource {
 
 export type CalendarView = 'month' | 'day' | 'year'
 
+/**
+ * A savings goal — name, target, accumulated amount, optional target date.
+ * Decoupled from transactions: contributions update `saved_amount` directly;
+ * no separate ledger or auto-created expense rows.
+ */
+export interface SavingsPlan {
+  id: string
+  user_id: string
+  name: string
+  target_amount: number
+  saved_amount: number
+  target_date: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+

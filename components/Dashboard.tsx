@@ -13,12 +13,18 @@ import { parseLocalDate } from '@/lib/utils'
 import ReceiptScanner from '@/components/ReceiptScanner'
 import CategoryPieChart from '@/components/CategoryPieChart'
 import TransactionForm from '@/components/TransactionForm'
+import TopSavingsCard from '@/components/TopSavingsCard'
 
 interface DashboardProps {
   showTableOnly?: boolean
+  /**
+   * Optional handler for the "View all" link on the Top Savings card.
+   * Passed through from the page so clicking jumps to the Savings tab.
+   */
+  onNavigateToSavings?: () => void
 }
 
-export default function Dashboard({ showTableOnly = false }: DashboardProps) {
+export default function Dashboard({ showTableOnly = false, onNavigateToSavings }: DashboardProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [loading, setLoading] = useState(true)
@@ -375,6 +381,9 @@ export default function Dashboard({ showTableOnly = false }: DashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Top 3 most-recently-active savings goals. Hides itself if none. */}
+      <TopSavingsCard onViewAll={onNavigateToSavings} />
 
       <Card className="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/20 dark:to-indigo-950/20 border-purple-200 dark:border-purple-800">
         <CardContent className="p-4 sm:p-6">

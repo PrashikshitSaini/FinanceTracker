@@ -9,13 +9,14 @@ import AIChat from '@/components/AIChat'
 import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, Bot, LogOut, User } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, Bot, LogOut, User, Target } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
 import ApiKeys from '@/components/ApiKeys'
 import PaymentSources from '@/components/PaymentSources'
 import HeaderMoreMenu from '@/components/HeaderMoreMenu'
+import Savings from '@/components/Savings'
 import {
   Dialog,
   DialogContent,
@@ -170,7 +171,7 @@ export default function Home() {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-6">
+          <TabsList className="grid w-full grid-cols-5 mb-6">
             <TabsTrigger value="dashboard" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Dashboard</span>
@@ -183,14 +184,18 @@ export default function Home() {
               <Wallet className="h-4 w-4" />
               <span className="hidden sm:inline">Transactions</span>
             </TabsTrigger>
+            <TabsTrigger value="savings" className="flex items-center gap-2">
+              <Target className="h-4 w-4" />
+              <span className="hidden sm:inline">Savings</span>
+            </TabsTrigger>
             <TabsTrigger value="ai" className="flex items-center gap-2">
               <Bot className="h-4 w-4" />
-              <span className="hidden sm:inline">AI Assistant</span>
+              <span className="hidden sm:inline">AI</span>
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
-            <Dashboard />
+            <Dashboard onNavigateToSavings={() => setActiveTab('savings')} />
           </TabsContent>
 
           <TabsContent value="calendar">
@@ -202,6 +207,10 @@ export default function Home() {
               <h2 className="text-xl font-semibold mb-4">All Transactions</h2>
               <Dashboard showTableOnly={true} />
             </Card>
+          </TabsContent>
+
+          <TabsContent value="savings">
+            <Savings />
           </TabsContent>
 
           <TabsContent value="ai">
