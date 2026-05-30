@@ -722,3 +722,61 @@ export async function PATCH(
     return NextResponse.json({ error: 'Failed to process request. Please try again.' }, { status: 500 })
   }
 }
+
+/**
+ * GET /api/transactions/[id]
+ *
+ * Fetch a single transaction by UUID. Same auth pattern as PATCH (Bearer /
+ * cookie / X-API-Key). Returns 404 if the transaction doesn't exist OR if
+ * it belongs to a different user — we deliberately don't distinguish so we
+ * don't leak the existence of other users' IDs.
+ *
+ * Reuses the existing `authenticate()` and `fetchTransaction()` helpers in
+ * this file. The PATCH handler is not touched.
+ */
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> } | { params: { id: string } }
+) {
+  try {
+    const rawParams = (context as { params: any }).params
+    const params = typeof rawParams?.then === 'function' ? await rawParams : rawParams
+    const transactionId = params?.id
+
+    if (!isValidUuid(transactionId)) {
+      return NextResponse.json({ error: 'Invalid transaction id.' }, { status: 400 })
+    }
+
+    const auth = await authenticate(request)
+    if (!auth.user) {
+      return NextResponse.json(
+        { error: 'Unauthorized. Provide a valid X-API-Key, Bearer token, or session cookie.' },
+        { status: 401 }
+      )
+    }
+
+    // Share the write-budget rate limit. Reads are cheap so this is generous
+    // headroom for any reasonable polling rate.
+    const rl = checkRateLimit(auth.user.id, RATE_LIMITS.QUICK_ADD)
+    if (!rl.success) {
+      const resetIn = rl.resetTime ? Math.ceil((rl.resetTime - Date.now()) / 1000) : 60
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Please wait ${resetIn} seconds before trying again.` },
+        { status: 429 }
+      )
+    }
+
+    const transaction = await fetchTransaction(transactionId, auth)
+    if (!transaction) {
+      return NextResponse.json({ error: 'Transaction not found.' }, { status: 404 })
+    }
+
+    return NextResponse.json({ data: transaction }, { status: 200 })
+  } catch (err) {
+    console.error('GET /api/transactions/[id] error:', err instanceof Error ? err.message : 'Unknown error')
+    return NextResponse.json(
+      { error: 'Failed to fetch transaction. Please try again.' },
+      { status: 500 }
+    )
+  }
+}
