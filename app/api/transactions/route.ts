@@ -6,13 +6,14 @@ import { transactionSchema, transactionUpdateSchema } from '@/lib/validation'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 // =============================================================================
-// GET-handler helpers (added 2026-05-30).
+// Route helpers (added 2026-05-30 for GET; auth reused by POST 2026-06-05).
 //
-// Scoped to the GET handler only. The existing POST and PUT handlers below are
-// not modified and continue to use their own inline auth logic — these helpers
-// were added strictly to let external systems (other apps, scripts, dashboards)
-// curl this endpoint with the user's X-API-Key. Bearer and cookie auth are
-// supported here too so the in-app fetches don't behave differently.
+// __getAuthenticate lets external systems (other apps, scripts, dashboards)
+// curl this endpoint with the user's X-API-Key; Bearer and cookie auth are
+// supported too so in-app fetches behave identically. GET and POST both use
+// it. The remaining __get* helpers are list-endpoint-specific. The PUT
+// handler below still uses its own inline Bearer/cookie auth and does NOT
+// accept X-API-Key.
 // =============================================================================
 
 // RFC 4122 UUID v4 — used to validate user IDs and any UUIDs from the query
@@ -448,67 +449,37 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/transactions
- * Create a new transaction with server-side validation
+ * Create a new transaction with server-side validation.
+ *
+ * Auth: Bearer / session cookie / X-API-Key (same contract as GET). On the
+ * X-API-Key path the insert uses the service-role key with user_id pinned to
+ * the key's owner, and the request shares the QUICK_ADD rate-limit bucket.
+ * Browser (cookie) and Bearer flows are unchanged and not rate-limited here.
  */
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('Authorization')
-    let user = null
-    let accessToken = null
-
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.replace('Bearer ', '')
-      try {
-        const verifyResponse = await fetch(
-          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/user`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            },
-          }
-        )
-        
-        if (verifyResponse.ok) {
-          const userData = await verifyResponse.json()
-          user = userData
-          accessToken = token
-        }
-      } catch (err) {
-      }
-    }
-
-    if (!user) {
-      const cookieStore = await cookies()
-      const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            get(name: string) {
-              return cookieStore.get(name)?.value
-            },
-            set(name: string, value: string, options: any) {
-              cookieStore.set({ name, value, ...options })
-            },
-            remove(name: string, options: any) {
-              cookieStore.set({ name, value: '', ...options })
-            },
-          },
-        }
-      )
-
-      const { data: { user: cookieUser }, error: authError } = await supabase.auth.getUser()
-      if (!authError && cookieUser) {
-        user = cookieUser
-      }
-    }
-
-    if (!user) {
+    const auth = await __getAuthenticate(request)
+    if (!auth.user) {
       return NextResponse.json(
-        { error: 'Unauthorized. Please log in.' },
+        { error: 'Unauthorized. Provide a valid X-API-Key, Bearer token, or session cookie.' },
         { status: 401 }
       )
+    }
+    const user = auth.user
+    const accessToken = auth.accessToken
+
+    // Rate-limit only the external (X-API-Key) path — same per-user budget as
+    // quick-add and the GET list endpoint. Pre-existing browser/Bearer flows
+    // keep their original unlimited behavior.
+    if (auth.apiKeyAuth) {
+      const rl = checkRateLimit(user.id, RATE_LIMITS.QUICK_ADD)
+      if (!rl.success) {
+        const resetIn = rl.resetTime ? Math.ceil((rl.resetTime - Date.now()) / 1000) : 60
+        return NextResponse.json(
+          { error: `Rate limit exceeded. Please wait ${resetIn} seconds before trying again.` },
+          { status: 429 }
+        )
+      }
     }
 
     const body = await request.json()
@@ -536,7 +507,85 @@ export async function POST(request: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-    if (accessToken) {
+    if (auth.apiKeyAuth) {
+      // X-API-Key path: service-role transport with user_id pinned explicitly
+      // (same pattern as the GET handler above and /api/quick-add). RLS is
+      // bypassed by the service role, so the payment_source check re-creates
+      // the RLS rule manually: shared rows (user_id IS NULL) or rows owned by
+      // this user. Categories are a global table — existence check suffices.
+      // All interpolated values are UUID-validated (zod .uuid() on the body
+      // fields, __getIsValidUuid on user.id inside __getAuthenticate).
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) {
+        console.error('POST /api/transactions: SUPABASE_SERVICE_ROLE_KEY missing')
+        return NextResponse.json(
+          { error: 'Server misconfigured: service-role key required for X-API-Key writes.' },
+          { status: 500 }
+        )
+      }
+      const serviceHeaders = {
+        'apikey': serviceRoleKey,
+        'Authorization': `Bearer ${serviceRoleKey}`,
+        'Content-Type': 'application/json',
+      }
+
+      const [categoryResponse, paymentSourceResponse] = await Promise.all([
+        fetch(
+          `${supabaseUrl}/rest/v1/categories?id=eq.${validatedData.category}&select=id`,
+          { headers: serviceHeaders }
+        ),
+        fetch(
+          `${supabaseUrl}/rest/v1/payment_sources?id=eq.${validatedData.payment_source}&or=(user_id.is.null,user_id.eq.${user.id})&select=id`,
+          { headers: serviceHeaders }
+        ),
+      ])
+
+      if (!categoryResponse.ok || (await categoryResponse.json()).length === 0) {
+        return NextResponse.json(
+          { error: 'Invalid category selected' },
+          { status: 400 }
+        )
+      }
+
+      if (!paymentSourceResponse.ok || (await paymentSourceResponse.json()).length === 0) {
+        return NextResponse.json(
+          { error: 'Invalid payment source selected' },
+          { status: 400 }
+        )
+      }
+
+      const insertResponse = await fetch(
+        `${supabaseUrl}/rest/v1/transactions`,
+        {
+          method: 'POST',
+          headers: { ...serviceHeaders, 'Prefer': 'return=representation' },
+          body: JSON.stringify({
+            amount: validatedData.amount,
+            type: validatedData.type,
+            date: validatedData.date,
+            category: validatedData.category,
+            payment_source: validatedData.payment_source,
+            notes: validatedData.notes,
+            image_url: validatedData.image_url,
+            user_id: user.id,
+          }),
+        }
+      )
+
+      if (!insertResponse.ok) {
+        console.error('POST /api/transactions: insert (api-key) failed', insertResponse.status)
+        return NextResponse.json(
+          { error: 'Failed to create transaction. Please try again.' },
+          { status: 500 }
+        )
+      }
+
+      const transaction = await insertResponse.json()
+      return NextResponse.json(
+        { success: true, data: Array.isArray(transaction) ? transaction[0] : transaction },
+        { status: 201 }
+      )
+    } else if (accessToken) {
       const categoryResponse = await fetch(
         `${supabaseUrl}/rest/v1/categories?id=eq.${validatedData.category}&select=id`,
         {

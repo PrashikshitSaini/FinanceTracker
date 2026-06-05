@@ -7,7 +7,9 @@ metadata:
 
 `app/api/quick-add/route.ts` is the entry point for ALL transaction inserts made outside the browser (MacroDroid, scripts, anything API-key-auth'd). After the 2026-05-22 Android-automation work, it has three responsibilities layered together — touching one means understanding the other two.
 
-**1. Three auth paths in priority order:** Bearer header → session cookie → `X-API-Key` header. Each path produces `user` (always) plus optional `accessToken` (Bearer) and `apiKeyAuth` (X-API-Key). The signed-JWT trick (`signUserJwt`) only fires on the API-key path so PostgREST applies normal user-level RLS on inserts — do not propagate `accessToken`/`apiKeyAuth` to a helper without preserving this distinction.
+**1. Three auth paths in priority order:** Bearer header → session cookie → `X-API-Key` header. Each path produces `user` (always) plus optional `accessToken` (Bearer) and `apiKeyAuth` (X-API-Key). Do not propagate `accessToken`/`apiKeyAuth` to a helper without preserving this distinction.
+
+**Canonical API-key write pattern (updated 2026-06-05):** the old `signUserJwt` signed-JWT trick was RETIRED in quick-add — it depended on `SUPABASE_JWT_SECRET` and silently produced zero-row reads when misconfigured (see header comment in quick-add/route.ts). The `apiKeyAuth` path now uses the **service-role key with `user_id` pinned explicitly** in payloads/filters, and payment_source visibility re-created manually via `or=(user_id.is.null,user_id.eq.<uid>)` (top-level filters AND with the or-group — verified against live PostgREST 2026-06-05). GET + POST /api/transactions follow this same pattern. **Exception:** `/api/transactions/[id]` still uses `signUserJwt` — it carries the known SUPABASE_JWT_SECRET footgun; if API-key calls to it ever return empty/404 mysteriously, that's why.
 
 **2. New optional body fields:** `is_refund` (strict `=== true`), `card_last_four` (must match `^[0-9]{4}$`), `client_ref` (≤128 chars, trimmed). Extracted up-front and applied across both simple and AI modes.
 
@@ -23,3 +25,7 @@ metadata:
 **Model:** `OPENROUTER_QUICK_ADD_MODEL` env var, default `deepseek/deepseek-v4-pro`. Standard (non-reasoning) mode. `response_format: { type: 'json_object' }` is requested but not relied on.
 
 **Migration prerequisite:** `docs/sql/2026-05-22-phase1-android-automation.sql` must be applied to Supabase before this file's new behavior works (the new fields read/write `is_refund`, `client_ref`, `card_last_four` columns).
+
+## Related: /api/transactions auth surface (2026-06-05)
+
+POST /api/transactions now accepts X-API-Key (reuses GET's `__getAuthenticate`; service-role insert with pinned user_id; rate-limited via QUICK_ADD bucket on the API-key path ONLY — browser/Bearer POST flows intentionally remain un-rate-limited to preserve pre-existing behavior). **PUT /api/transactions is still Bearer/cookie only** — deliberate, not an oversight; user hasn't asked for API-key updates. Query-param API keys are unsupported everywhere by design (header only). Verified live 2026-06-05: 401→201 with temp key, cross-user payment_source rejected, test artifacts cleaned up.
