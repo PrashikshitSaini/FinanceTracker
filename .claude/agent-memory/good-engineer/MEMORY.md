@@ -2,3 +2,4 @@
 - [User location & currency](user_location_currency.md) — user is in the US, uses USD; never default to India/INR examples or integrations
 - [quick-add route invariants](project_quick_add_route.md) — auth paths, capture-beats-correctness, idempotency layering, refund post-processing rules
 - [Database schema (verified 2026-05-23)](project_database_schema.md) — payment_sources & categories are GLOBAL (no user_id); transactions.user_id is nullable; check info_schema before any migration
+- [Finn tool-calling invariants](project_finn_tools.md) — AIBubble↔/api/ai-chat tools; chat state drops tool context between turns; delete-confirm is prompt-level only; refresh via finn:* events

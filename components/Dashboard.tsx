@@ -47,6 +47,15 @@ export default function Dashboard({ showTableOnly = false, onNavigateToSavings }
     loadTransactions()
   }, [currentMonth])
 
+  // Finn (the AI bubble) dispatches `finn:transactions-changed` after it logs,
+  // updates, or deletes a transaction via tool calling. Refresh the current
+  // month so the change shows without a manual reload.
+  useEffect(() => {
+    const handler = () => loadTransactions()
+    window.addEventListener('finn:transactions-changed', handler)
+    return () => window.removeEventListener('finn:transactions-changed', handler)
+  }, [currentMonth])
+
   const loadCategoriesAndSources = async () => {
     const [categoriesResult, sourcesResult] = await Promise.all([
       supabase.from('categories').select('id, name'),

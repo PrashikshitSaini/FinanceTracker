@@ -14,9 +14,11 @@ export function sanitizeHtml(input: string | null | undefined): string | null {
 }
 
 /**
- * Validate date string format (YYYY-MM-DD) and ensure it's within reasonable range
+ * Validate date string format (YYYY-MM-DD) and ensure it's within reasonable range.
+ * Exported so other server routes (e.g. the AI chat tools) validate dates against
+ * the exact same rule instead of duplicating the range logic.
  */
-function validateDate(dateString: string): boolean {
+export function validateDate(dateString: string): boolean {
   const dateRegex = /^\d{4}-\d{2}-\d{2}$/
   if (!dateRegex.test(dateString)) return false
   

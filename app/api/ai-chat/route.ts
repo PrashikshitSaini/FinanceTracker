@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { transactionSchema, sanitizeHtml, validateDate } from '@/lib/validation'
 
 // Two-tier model selection — the client picks per-request via `model_tier`:
 //   • "flash" (default) — DeepSeek V4 Flash. ~4× cheaper, fast, no reasoning.
@@ -118,6 +119,126 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'log_payment',
+      description:
+        'Record a new transaction (a payment/expense or income) for the user. Use when they say things like "log a $12 lunch on my Amex" or "add $2000 paycheck as income". Requires an amount, a category, and a payment method. If the category or payment method is unclear or missing, ASK the user — never guess one they did not imply.',
+      parameters: {
+        type: 'object',
+        properties: {
+          amount: {
+            type: 'number',
+            description: 'The transaction amount in the user\'s currency. Must be positive.',
+          },
+          category: {
+            type: 'string',
+            description: 'Category NAME (e.g., "Groceries") or its UUID. Must be one of the user\'s existing categories.',
+          },
+          payment_source: {
+            type: 'string',
+            description: 'Payment method NAME (e.g., "Amex") or its UUID. Must be one of the user\'s existing payment methods.',
+          },
+          type: {
+            type: 'string',
+            enum: ['expense', 'income'],
+            description: 'Defaults to "expense" if omitted. Use "income" for money received.',
+          },
+          date: {
+            type: 'string',
+            description: 'Transaction date in YYYY-MM-DD. Defaults to today if omitted.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Optional note/merchant/description. Max 1000 chars.',
+          },
+          is_refund: {
+            type: 'boolean',
+            description: 'Set true if this is a refund. Refunds are recorded as income.',
+          },
+        },
+        required: ['amount', 'category', 'payment_source'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_transactions',
+      description:
+        'Search the user\'s transactions. ALWAYS use this to locate the exact transaction before updating or deleting one — it returns each match\'s id, which update_payment and delete_payment require. Filter by any combination of amount range, date range, category, payment method, type, or a keyword found in the notes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keyword to match against the transaction notes (case-insensitive substring).',
+          },
+          type: {
+            type: 'string',
+            enum: ['expense', 'income'],
+          },
+          category: {
+            type: 'string',
+            description: 'Category NAME or UUID to filter by.',
+          },
+          payment_source: {
+            type: 'string',
+            description: 'Payment method NAME or UUID to filter by.',
+          },
+          start_date: { type: 'string', description: 'Inclusive lower bound on date, YYYY-MM-DD.' },
+          end_date: { type: 'string', description: 'Inclusive upper bound on date, YYYY-MM-DD.' },
+          min_amount: { type: 'number', description: 'Inclusive lower bound on amount.' },
+          max_amount: { type: 'number', description: 'Inclusive upper bound on amount.' },
+          limit: { type: 'number', description: 'Max results to return (default 10, max 25).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_payment',
+      description:
+        'Change an existing transaction, identified by its UUID (get it from find_transactions first). Only include the fields you want to change. Before overwriting, confirm the specific transaction with the user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          transaction_id: {
+            type: 'string',
+            description: 'The UUID of the transaction to update (from find_transactions).',
+          },
+          amount: { type: 'number', description: 'New amount. Must be positive.' },
+          type: { type: 'string', enum: ['expense', 'income'] },
+          date: { type: 'string', description: 'New date, YYYY-MM-DD.' },
+          category: { type: 'string', description: 'New category NAME or UUID.' },
+          payment_source: { type: 'string', description: 'New payment method NAME or UUID.' },
+          notes: { type: 'string', description: 'New note. Pass an empty string to clear it. Max 1000 chars.' },
+          is_refund: { type: 'boolean', description: 'Set/clear the refund flag.' },
+        },
+        required: ['transaction_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_payment',
+      description:
+        'Permanently delete a transaction, identified by its UUID (get it from find_transactions first). This cannot be undone — you MUST confirm the specific transaction with the user before calling this.',
+      parameters: {
+        type: 'object',
+        properties: {
+          transaction_id: {
+            type: 'string',
+            description: 'The UUID of the transaction to delete (from find_transactions).',
+          },
+        },
+        required: ['transaction_id'],
+      },
+    },
+  },
 ] as const
 
 // UUID v4 — used to detect when the model passes a UUID directly vs a name.
@@ -162,6 +283,57 @@ async function findSavingsPlan(
     .limit(1)
     .maybeSingle()
   return data ?? null
+}
+
+// ─── Transaction helpers ─────────────────────────────────────────────────────
+// The transaction tools operate on `transactions` for the authenticated user.
+// The model works with category / payment-method NAMES; we resolve those to the
+// UUID-strings the `category` / `payment_source` columns actually store, and we
+// only ever accept a value that exists in the user's own visible lists — so a
+// hallucinated name or id is rejected rather than written. All reads/writes go
+// through the RLS-bound `supabase` client, so ownership is enforced by the DB.
+
+interface UserOptions {
+  categories: { id: string; name: string }[]
+  paymentSources: { id: string; name: string }[]
+}
+
+/** Today's date as YYYY-MM-DD, used as the default transaction date. */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/**
+ * Fetch the user's categories (global table) and payment sources (RLS-scoped to
+ * shared + own). Used to resolve names → UUIDs and to reject unknown values.
+ */
+async function fetchUserOptions(supabase: SupabaseClient): Promise<UserOptions> {
+  const [catResult, srcResult] = await Promise.all([
+    supabase.from('categories').select('id, name').order('name'),
+    supabase.from('payment_sources').select('id, name').order('name'),
+  ])
+  return {
+    categories: (catResult.data as { id: string; name: string }[]) ?? [],
+    paymentSources: (srcResult.data as { id: string; name: string }[]) ?? [],
+  }
+}
+
+/**
+ * Resolve a category/payment-method reference to a UUID. Accepts an exact
+ * (case-insensitive) name match, or a UUID that is present in the list.
+ * Returns null when nothing matches — the caller turns that into a message
+ * asking the user to clarify, rather than writing an unvalidated value.
+ */
+function resolveOptionId(
+  input: string,
+  list: { id: string; name: string }[],
+): string | null {
+  const value = input.trim()
+  if (!value) return null
+  const byName = list.find(o => o.name.toLowerCase() === value.toLowerCase())
+  if (byName) return byName.id
+  if (UUID_RE.test(value) && list.some(o => o.id === value)) return value
+  return null
 }
 
 async function executeToolCall(
@@ -284,6 +456,274 @@ async function executeToolCall(
         ok: true,
         message: `Updated "${data.name}".`,
         data: { kind: 'savings_plan_updated', plan: data },
+      }
+    }
+
+    if (name === 'log_payment') {
+      const options = await fetchUserOptions(supabase)
+      if (options.categories.length === 0 || options.paymentSources.length === 0) {
+        return { ok: false, message: 'You don\'t have any categories or payment methods set up yet — add one in the app first.' }
+      }
+
+      const amount = typeof args.amount === 'number' ? args.amount : NaN
+      const type = args.type === 'income' ? 'income' : 'expense'
+      const date =
+        typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : todayIso()
+      const categoryInput = typeof args.category === 'string' ? args.category : ''
+      const sourceInput = typeof args.payment_source === 'string' ? args.payment_source : ''
+      const isRefund = args.is_refund === true
+
+      if (!categoryInput) {
+        return { ok: false, message: `Which category? Your options: ${options.categories.map(c => c.name).join(', ')}.` }
+      }
+      const categoryId = resolveOptionId(categoryInput, options.categories)
+      if (!categoryId) {
+        return { ok: false, message: `I couldn't match the category "${categoryInput}". Your options: ${options.categories.map(c => c.name).join(', ')}.` }
+      }
+      if (!sourceInput) {
+        return { ok: false, message: `Which payment method? Your options: ${options.paymentSources.map(s => s.name).join(', ')}.` }
+      }
+      const sourceId = resolveOptionId(sourceInput, options.paymentSources)
+      if (!sourceId) {
+        return { ok: false, message: `I couldn't match the payment method "${sourceInput}". Your options: ${options.paymentSources.map(s => s.name).join(', ')}.` }
+      }
+
+      // Refund post-processing mirrors quick-add / PATCH: a refund is recorded
+      // as income with a "Refund:" note prefix.
+      let finalType: 'income' | 'expense' = type
+      let notes = typeof args.notes === 'string' ? sanitizeHtml(args.notes.slice(0, 1000)) : null
+      if (isRefund) {
+        finalType = 'income'
+        notes = !notes ? 'Refund' : notes.startsWith('Refund:') ? notes : `Refund: ${notes}`.slice(0, 1000)
+      }
+
+      // Validate the assembled payload with the same schema the manual add path
+      // uses, so amount/date/notes rules stay identical across entry points.
+      const parsed = transactionSchema.safeParse({
+        amount,
+        type: finalType,
+        date,
+        category: categoryId,
+        payment_source: sourceId,
+        notes,
+        user_id: userId,
+      })
+      if (!parsed.success) {
+        const first = parsed.error.errors[0]
+        return { ok: false, message: `Refused: ${first?.message ?? 'invalid transaction data'}.` }
+      }
+      const v = parsed.data
+
+      const row: Record<string, unknown> = {
+        amount: v.amount,
+        type: v.type,
+        date: v.date,
+        category: v.category,
+        payment_source: v.payment_source,
+        notes: v.notes ?? null,
+        user_id: userId,
+      }
+      if (isRefund) row.is_refund = true
+
+      const { data, error } = await supabase.from('transactions').insert([row]).select().single()
+      if (error || !data) return { ok: false, message: 'Failed to log the payment.' }
+
+      const catName = options.categories.find(c => c.id === v.category)?.name ?? 'Uncategorized'
+      const srcName = options.paymentSources.find(s => s.id === v.payment_source)?.name ?? ''
+      return {
+        ok: true,
+        message:
+          `Logged ${v.type} of ${v.amount} on ${v.date} — ${catName}` +
+          (srcName ? ` via ${srcName}` : '') + '.',
+        data: { kind: 'transaction_logged', transaction: data },
+      }
+    }
+
+    if (name === 'find_transactions') {
+      const options = await fetchUserOptions(supabase)
+
+      const limit =
+        typeof args.limit === 'number' && args.limit > 0 ? Math.min(Math.floor(args.limit), 25) : 10
+
+      let query = supabase
+        .from('transactions')
+        .select('id, amount, type, date, category, payment_source, notes, is_refund')
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(limit)
+
+      if (args.type === 'income' || args.type === 'expense') query = query.eq('type', args.type)
+      if (typeof args.start_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.start_date)) {
+        query = query.gte('date', args.start_date)
+      }
+      if (typeof args.end_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.end_date)) {
+        query = query.lte('date', args.end_date)
+      }
+      if (typeof args.min_amount === 'number') query = query.gte('amount', args.min_amount)
+      if (typeof args.max_amount === 'number') query = query.lte('amount', args.max_amount)
+      if (typeof args.category === 'string' && args.category.trim()) {
+        const id = resolveOptionId(args.category, options.categories)
+        if (!id) {
+          return { ok: false, message: `No category matches "${args.category}". Your options: ${options.categories.map(c => c.name).join(', ')}.` }
+        }
+        query = query.eq('category', id)
+      }
+      if (typeof args.payment_source === 'string' && args.payment_source.trim()) {
+        const id = resolveOptionId(args.payment_source, options.paymentSources)
+        if (!id) {
+          return { ok: false, message: `No payment method matches "${args.payment_source}". Your options: ${options.paymentSources.map(s => s.name).join(', ')}.` }
+        }
+        query = query.eq('payment_source', id)
+      }
+      if (typeof args.query === 'string' && args.query.trim()) {
+        // Neutralize PostgREST ilike wildcards / delimiters so the keyword is
+        // matched literally as a substring.
+        const keyword = args.query.trim().replace(/[%,_]/g, ' ')
+        query = query.ilike('notes', `%${keyword}%`)
+      }
+
+      const { data, error } = await query
+      if (error) return { ok: false, message: 'Failed to search transactions.' }
+
+      const rows = (data as Array<Record<string, unknown>>) ?? []
+      if (rows.length === 0) {
+        return { ok: true, message: 'No matching transactions found.', data: { kind: 'transactions_found', transactions: [] } }
+      }
+
+      const catMap = new Map(options.categories.map(c => [c.id, c.name]))
+      const srcMap = new Map(options.paymentSources.map(s => [s.id, s.name]))
+      const lines = rows
+        .map((t, i) => {
+          const sign = t.type === 'income' ? '+' : '-'
+          const cat = catMap.get(t.category as string) ?? 'Uncategorized'
+          const src = srcMap.get(t.payment_source as string) ?? 'unknown'
+          return `${i + 1}. id=${t.id} | ${t.date} | ${sign}${t.amount} ${t.type} | ${cat} | ${src}` +
+            (t.notes ? ` | ${t.notes}` : '')
+        })
+        .join('\n')
+
+      return {
+        ok: true,
+        message:
+          `Found ${rows.length} transaction(s):\n${lines}\n\n` +
+          'Use the id with update_payment / delete_payment. Confirm the specific transaction with the user before deleting or overwriting.',
+        data: { kind: 'transactions_found', transactions: rows },
+      }
+    }
+
+    if (name === 'update_payment') {
+      const transactionId = typeof args.transaction_id === 'string' ? args.transaction_id.trim() : ''
+      if (!UUID_RE.test(transactionId)) {
+        return { ok: false, message: 'Refused: a valid transaction_id is required — use find_transactions to get it.' }
+      }
+
+      // Confirm the row is visible to this user (RLS) before patching, and read
+      // its current type/notes for refund post-processing.
+      const { data: existing } = await supabase
+        .from('transactions')
+        .select('id, type, notes')
+        .eq('id', transactionId)
+        .maybeSingle()
+      if (!existing) {
+        return { ok: false, message: 'That transaction doesn\'t exist or isn\'t yours.' }
+      }
+
+      const options = await fetchUserOptions(supabase)
+      const patch: Record<string, unknown> = {}
+      const rejected: string[] = []
+
+      if (args.amount !== undefined) {
+        if (typeof args.amount === 'number' && args.amount > 0 && args.amount <= 1_000_000_000) {
+          patch.amount = args.amount
+        } else {
+          rejected.push('amount (must be a number > 0 and ≤ 1B)')
+        }
+      }
+      if (args.type === 'income' || args.type === 'expense') patch.type = args.type
+      if (args.date !== undefined) {
+        if (typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) && validateDate(args.date)) {
+          patch.date = args.date
+        } else {
+          rejected.push('date (must be YYYY-MM-DD within range)')
+        }
+      }
+      if (typeof args.category === 'string' && args.category.trim()) {
+        const id = resolveOptionId(args.category, options.categories)
+        if (id) patch.category = id
+        else rejected.push(`category "${args.category}"`)
+      }
+      if (typeof args.payment_source === 'string' && args.payment_source.trim()) {
+        const id = resolveOptionId(args.payment_source, options.paymentSources)
+        if (id) patch.payment_source = id
+        else rejected.push(`payment method "${args.payment_source}"`)
+      }
+      if (args.notes !== undefined) {
+        if (args.notes === null) patch.notes = null
+        else if (typeof args.notes === 'string') patch.notes = sanitizeHtml(args.notes.slice(0, 1000))
+      }
+      if (args.is_refund === true || args.is_refund === false) patch.is_refund = args.is_refund
+
+      // Refund post-processing: flipping is_refund true forces income and a
+      // "Refund:" note prefix, matching the log path and the PATCH route.
+      if (patch.is_refund === true && (patch.type ?? existing.type) !== 'income') {
+        patch.type = 'income'
+        if (patch.notes === undefined) {
+          const current = (existing.notes as string) ?? ''
+          patch.notes = (current.startsWith('Refund:') ? current : `Refund: ${current}`.trim()).slice(0, 1000)
+        }
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return {
+          ok: false,
+          message: rejected.length
+            ? `Couldn't apply: ${rejected.join(', ')}.`
+            : 'Nothing to update — no valid fields were provided.',
+        }
+      }
+
+      // Ownership enforced by RLS on the cookie-bound client (same as the app's
+      // own inline-edit path, which filters by id only).
+      const { data, error } = await supabase
+        .from('transactions')
+        .update(patch)
+        .eq('id', transactionId)
+        .select()
+        .single()
+      if (error || !data) return { ok: false, message: 'Failed to update the payment.' }
+
+      const ignored = rejected.length ? ` (ignored: ${rejected.join(', ')})` : ''
+      return {
+        ok: true,
+        message: `Updated the transaction${ignored}.`,
+        data: { kind: 'transaction_updated', transaction: data },
+      }
+    }
+
+    if (name === 'delete_payment') {
+      const transactionId = typeof args.transaction_id === 'string' ? args.transaction_id.trim() : ''
+      if (!UUID_RE.test(transactionId)) {
+        return { ok: false, message: 'Refused: a valid transaction_id is required — use find_transactions to get it.' }
+      }
+
+      // Read the row first (RLS-scoped) so we can 404 cleanly and describe what
+      // was removed in the confirmation message.
+      const { data: existing } = await supabase
+        .from('transactions')
+        .select('id, amount, type, date')
+        .eq('id', transactionId)
+        .maybeSingle()
+      if (!existing) {
+        return { ok: false, message: 'That transaction doesn\'t exist or isn\'t yours.' }
+      }
+
+      const { error } = await supabase.from('transactions').delete().eq('id', transactionId)
+      if (error) return { ok: false, message: 'Failed to delete the payment.' }
+
+      return {
+        ok: true,
+        message: `Deleted the ${existing.type} of ${existing.amount} on ${existing.date}.`,
+        data: { kind: 'transaction_deleted', transaction_id: transactionId },
       }
     }
 
@@ -433,10 +873,23 @@ export async function POST(request: NextRequest) {
 
     const systemPrompt = `You are Finn, the user's friendly personal-finance buddy living inside their Finance Tracker app. You see their transactions, savings goals, and current finances. Keep replies SHORT (1-3 sentences) unless they ask for detail. Be warm and casual — like texting a friend.
 
-You have tools to take actions on the user's behalf:
+You have tools to take actions on the user's behalf.
+
+Savings goals:
   • create_savings_plan — when they want a new goal
   • contribute_to_savings_plan — when they say "add X to Y" or "I just saved Z toward Y"
   • update_savings_plan — when they want to change a goal's name/target/date/notes
+
+Transactions (payments):
+  • log_payment — record a new payment/expense or income (e.g., "log a $12 lunch on my Amex"). Needs an amount, a category, and a payment method. If any of those is missing or unclear, ASK — never invent a category or payment method the user didn't imply. Date defaults to today; type defaults to expense.
+  • find_transactions — search the user's transactions. ALWAYS use this to locate the exact transaction before you edit or delete one; it returns each match's id.
+  • update_payment — change an existing transaction by its id (amount, date, type, category, payment method, notes, or refund flag).
+  • delete_payment — permanently remove a transaction by its id.
+
+SAFETY — deleting or overwriting a transaction is destructive:
+  • First find it, then state the exact transaction back to the user (amount, date, category) and ask them to confirm. Only call delete_payment / update_payment AFTER they clearly say yes.
+  • When the user confirms, call find_transactions again to re-fetch the current id, then act on that id.
+  • If find_transactions returns more than one match, ask the user which one — never guess.
 
 When a user asks for an action, USE THE TOOL. Don't just describe what they should do. After a tool succeeds, briefly confirm what you did.${contextBlock}`
 

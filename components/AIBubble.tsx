@@ -98,6 +98,7 @@ export default function AIBubble() {
     const [
       { data: txData },
       { data: catData },
+      { data: srcData },
       { data: planData },
     ] = await Promise.all([
       supabase
@@ -108,6 +109,7 @@ export default function AIBubble() {
         .order('date', { ascending: false })
         .limit(50),
       supabase.from('categories').select('id, name'),
+      supabase.from('payment_sources').select('id, name'),
       supabase
         .from('savings_plans')
         .select('id, name, target_amount, saved_amount, target_date, notes')
@@ -117,6 +119,12 @@ export default function AIBubble() {
     const transactions = (txData ?? []) as Transaction[]
     const categoryMap: Record<string, string> = {}
     ;(catData ?? []).forEach((c: any) => { categoryMap[c.id] = c.name })
+
+    // Explicit name lists so Finn can map the user's phrasing ("groceries",
+    // "my amex") onto the exact category / payment-method names the log_payment
+    // and find_transactions tools validate against.
+    const categoryNames = (catData ?? []).map((c: any) => c.name)
+    const paymentSourceNames = (srcData ?? []).map((s: any) => s.name)
 
     const income = transactions
       .filter(t => t.type === 'income')
@@ -166,6 +174,9 @@ export default function AIBubble() {
       ``,
       `Recent transactions:`,
       recentLines || '  (none)',
+      ``,
+      `Your categories (use these exact names when logging or finding payments): ${categoryNames.length ? categoryNames.join(', ') : '(none)'}.`,
+      `Your payment methods: ${paymentSourceNames.length ? paymentSourceNames.join(', ') : '(none)'}.`,
       ``,
       `Savings goals (use the bracketed UUID as plan_identifier for tool calls when possible — name also works):`,
       planLines,
@@ -311,10 +322,23 @@ export default function AIBubble() {
 
       setMessages(prev => [...prev, { role: 'assistant', content: json.content as string }])
 
-      // If the AI took any actions (created/updated goals), let the rest of
-      // the app know to refresh. Listened to by Savings.tsx + dashboard.
+      // If the AI took any actions, let the rest of the app know to refresh.
+      // We branch on the result `kind` so a savings change refreshes the
+      // savings views (Savings.tsx, TopSavingsCard) and a transaction change
+      // refreshes the dashboard — read-only kinds (e.g. transactions_found)
+      // trigger nothing.
       if (Array.isArray(json.tool_results) && json.tool_results.length > 0) {
-        window.dispatchEvent(new CustomEvent('finn:savings-changed'))
+        const results = json.tool_results as unknown[]
+        const kinds = results
+          .map(r => (r && typeof r === 'object' ? (r as { kind?: unknown }).kind : undefined))
+          .filter((k): k is string => typeof k === 'string')
+        if (kinds.some(k => k.startsWith('savings_plan'))) {
+          window.dispatchEvent(new CustomEvent('finn:savings-changed'))
+        }
+        const txKinds = new Set(['transaction_logged', 'transaction_updated', 'transaction_deleted'])
+        if (kinds.some(k => txKinds.has(k))) {
+          window.dispatchEvent(new CustomEvent('finn:transactions-changed'))
+        }
       }
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Network hiccup. Try once more?' }])

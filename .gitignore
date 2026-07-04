@@ -15,6 +15,9 @@
 
 # misc
 .DS_Store
+# macOS AppleDouble sidecar files (this repo lives on an exFAT volume, which
+# spawns ._ files for every entry). Never commit them.
+._*
 *.pem
 
 # debug
