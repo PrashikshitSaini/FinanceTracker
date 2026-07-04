@@ -185,6 +185,23 @@ export default function Dashboard({ showTableOnly = false, onNavigateToSavings }
     amount,
   })).sort((a, b) => b.amount - a.amount)
 
+  // Same expenses, grouped by the payment source (card) instead of category.
+  // Both breakdowns sum to totalExpenses since every expense has exactly one
+  // category and one payment source. Falls back to the raw id if a source
+  // name isn't loaded (e.g. a legacy row), mirroring the category fallback.
+  const paymentSourceExpenses = transactions
+    .filter(t => t.type === 'expense')
+    .reduce((acc, t) => {
+      const sourceName = paymentSourceMap[t.payment_source] || t.payment_source
+      acc[sourceName] = (acc[sourceName] || 0) + t.amount
+      return acc
+    }, {} as Record<string, number>)
+
+  const paymentSourceData = Object.entries(paymentSourceExpenses).map(([category, amount]) => ({
+    category,
+    amount,
+  })).sort((a, b) => b.amount - a.amount)
+
   if (showTableOnly) {
     return (
       <div className="space-y-4">
@@ -429,8 +446,14 @@ export default function Dashboard({ showTableOnly = false, onNavigateToSavings }
           <CardHeader>
             <CardTitle>Expenses by Category</CardTitle>
           </CardHeader>
-          <CardContent>
-            <CategoryPieChart data={categoryData} total={totalExpenses} />
+          <CardContent className="space-y-6">
+            <CategoryPieChart data={categoryData} total={totalExpenses} label="category" />
+            {paymentSourceData.length > 0 && (
+              <div className="border-t pt-6 space-y-4">
+                <CardTitle className="text-base">Expenses by Payment Source</CardTitle>
+                <CategoryPieChart data={paymentSourceData} total={totalExpenses} label="payment source" />
+              </div>
+            )}
           </CardContent>
         </Card>
 

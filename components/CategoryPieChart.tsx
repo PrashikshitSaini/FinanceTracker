@@ -43,9 +43,13 @@ interface CategoryPieChartProps {
   /** Sum of all amounts — passed in (not recomputed) so caller can decide
    *  what "total" means (e.g., all expenses vs. filtered subset). */
   total: number
+  /** What the slices represent, used in the SVG aria-label so the chart is
+   *  described correctly for screen readers (e.g., "category", "payment
+   *  source"). Defaults to "category" to preserve existing behavior. */
+  label?: string
 }
 
-export default function CategoryPieChart({ data, total }: CategoryPieChartProps) {
+export default function CategoryPieChart({ data, total, label = 'category' }: CategoryPieChartProps) {
   const { currency } = useCurrency()
 
   // Pre-compute slice geometry once per data change. Each slice carries its
@@ -86,7 +90,7 @@ export default function CategoryPieChart({ data, total }: CategoryPieChartProps)
     <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start">
       {/* Chart */}
       <div className="flex-shrink-0 relative">
-        <svg viewBox="0 0 200 200" className="w-48 h-48" role="img" aria-label="Expenses by category">
+        <svg viewBox="0 0 200 200" className="w-48 h-48" role="img" aria-label={`Expenses by ${label}`}>
           {slices.length === 1 ? (
             // Single-slice case: stroke a circle. SVG arcs can't draw a full
             // 360° arc with a single path, so this avoids the edge case.
