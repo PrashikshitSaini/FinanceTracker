@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { MoreVertical, CreditCard, FileDown, KeyRound } from 'lucide-react'
+import { MoreVertical, CreditCard, FileDown, KeyRound, Bell } from 'lucide-react'
 
 /**
  * Dropdown menu for header secondary actions: Payment Sources, Export
@@ -19,11 +19,13 @@ import { MoreVertical, CreditCard, FileDown, KeyRound } from 'lucide-react'
 interface HeaderMoreMenuProps {
   onOpenPaymentSources: () => void
   onOpenApiKeys: () => void
+  onOpenNotifications: () => void
 }
 
 export default function HeaderMoreMenu({
   onOpenPaymentSources,
   onOpenApiKeys,
+  onOpenNotifications,
 }: HeaderMoreMenuProps) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -81,6 +83,11 @@ export default function HeaderMoreMenu({
             icon={<CreditCard className="h-4 w-4" />}
             label="Payment Sources"
             onClick={() => runAndClose(onOpenPaymentSources)}
+          />
+          <MenuItem
+            icon={<Bell className="h-4 w-4" />}
+            label="Spending Alerts"
+            onClick={() => runAndClose(onOpenNotifications)}
           />
           <MenuItem
             icon={<FileDown className="h-4 w-4" />}

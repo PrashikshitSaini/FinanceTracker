@@ -1,5 +1,7 @@
 - [Web search first](feedback_web_search_first.md) — verify any external/product/model fact via web before asserting; never rely on training-data memory
+- [Never `git add -A` here](feedback_git_add_explicit.md) — exFAT volume spawns ._ files; stage explicit paths only. Burned the user once (committed 105 junk files)
 - [User location & currency](user_location_currency.md) — user is in the US, uses USD; never default to India/INR examples or integrations
 - [quick-add route invariants](project_quick_add_route.md) — auth paths, capture-beats-correctness, idempotency layering, refund post-processing rules
 - [Database schema (verified 2026-05-23)](project_database_schema.md) — payment_sources & categories are GLOBAL (no user_id); transactions.user_id is nullable; check info_schema before any migration
 - [Finn tool-calling invariants](project_finn_tools.md) — AIBubble↔/api/ai-chat tools; chat state drops tool context between turns; delete-confirm is prompt-level only; refresh via finn:* events
+- [Push notifications (PWA)](project_push_notifications.md) — web-push spending alerts; Android badge is a dot only, no animated/always-on notifs possible; VAPID env + SQL migration + Vercel cron required

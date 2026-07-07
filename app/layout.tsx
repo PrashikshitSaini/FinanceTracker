@@ -4,6 +4,8 @@ import "./globals.css"
 import { CurrencyProvider } from "@/contexts/CurrencyContext"
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister"
 import TimezoneSync from "@/components/TimezoneSync"
+import PushBadgeSync from "@/components/PushBadgeSync"
+import SpendReveal from "@/components/SpendReveal"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -55,6 +57,10 @@ export default function RootLayout({
             the user's wall clock — fixes evening transactions landing on the
             next calendar day. */}
         <TimezoneSync />
+        {/* Clears the app-icon badge when the app is opened/focused. */}
+        <PushBadgeSync />
+        {/* In-app count-up reveal when launched from a push notification. */}
+        <SpendReveal />
         <CurrencyProvider>
           {children}
         </CurrencyProvider>

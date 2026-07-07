@@ -14,6 +14,7 @@ import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
 import ApiKeys from '@/components/ApiKeys'
 import PaymentSources from '@/components/PaymentSources'
+import NotificationSettings from '@/components/NotificationSettings'
 import HeaderMoreMenu from '@/components/HeaderMoreMenu'
 import Savings from '@/components/Savings'
 import AIBubble from '@/components/AIBubble'
@@ -29,6 +30,7 @@ export default function Home() {
   const [showTransactionForm, setShowTransactionForm] = useState(false)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showPaymentSources, setShowPaymentSources] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
   const [user, setUser] = useState<SupabaseUser | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -160,6 +162,7 @@ export default function Home() {
               <HeaderMoreMenu
                 onOpenPaymentSources={() => setShowPaymentSources(true)}
                 onOpenApiKeys={() => setShowApiKeys(true)}
+                onOpenNotifications={() => setShowNotifications(true)}
               />
               <Button variant="outline" onClick={handleSignOut} size="sm" title="Sign out">
                 <LogOut className="h-4 w-4" />
@@ -233,6 +236,15 @@ export default function Home() {
             <DialogTitle>Payment Sources</DialogTitle>
           </DialogHeader>
           <PaymentSources />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showNotifications} onOpenChange={setShowNotifications}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Spending Alerts</DialogTitle>
+          </DialogHeader>
+          <NotificationSettings />
         </DialogContent>
       </Dialog>
 
