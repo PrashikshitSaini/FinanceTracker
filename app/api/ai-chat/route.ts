@@ -32,10 +32,10 @@ const MAX_CONTENT_LENGTH = 20000
 const ALLOWED_ROLES = new Set(['user', 'assistant', 'system', 'tool'])
 
 // ─── Tool definitions ───────────────────────────────────────────────────────
-// All tools operate on `savings_plans` for the authenticated user. The model
-// can use the user's plan NAME (case-insensitive) or UUID as the identifier —
-// we resolve to a UUID server-side before mutating, so a stale conversation
-// can't accidentally hit the wrong row.
+// Mutating tools operate on the authenticated user's savings plans,
+// subscriptions, or transactions. Name-based identifiers are resolved to a
+// visible row server-side before a mutation, so stale context can't target a
+// different user's data.
 
 const TOOLS = [
   {
@@ -116,6 +116,50 @@ const TOOLS = [
           notes: { type: 'string' },
         },
         required: ['plan_identifier'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_subscription',
+      description:
+        'Create a recurring expense subscription. Use only when the user explicitly asks to add a subscription. A subscription is a planned recurring expense; it does not create a transaction until the user records a payment.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Subscription name, such as "Netflix". Max 100 characters.' },
+          amount: { type: 'number', description: 'Recurring charge amount in the user\'s currency. Must be positive.' },
+          category: { type: 'string', description: 'Existing category NAME or UUID. Ask the user if it is unclear; never invent one.' },
+          payment_source: { type: 'string', description: 'Existing payment method NAME or UUID. Ask the user if it is unclear; never invent one.' },
+          billing_cycle: { type: 'string', enum: ['weekly', 'monthly', 'yearly'], description: 'How often the subscription is charged.' },
+          next_billing_date: { type: 'string', description: 'Next charge date in YYYY-MM-DD format.' },
+          notes: { type: 'string', description: 'Optional notes. Max 1000 characters.' },
+        },
+        required: ['name', 'amount', 'category', 'payment_source', 'billing_cycle', 'next_billing_date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_subscription',
+      description:
+        'Edit an existing subscription — its name, amount, category, payment source, billing cycle, next billing date, notes, or active/paused status. Use only when the user explicitly asks for a change.',
+      parameters: {
+        type: 'object',
+        properties: {
+          subscription_identifier: { type: 'string', description: 'The subscription name (case-insensitive match) or UUID.' },
+          name: { type: 'string' },
+          amount: { type: 'number', description: 'New recurring amount. Must be positive.' },
+          category: { type: 'string', description: 'New existing category NAME or UUID.' },
+          payment_source: { type: 'string', description: 'New existing payment method NAME or UUID.' },
+          billing_cycle: { type: 'string', enum: ['weekly', 'monthly', 'yearly'] },
+          next_billing_date: { type: 'string', description: 'New date in YYYY-MM-DD format.' },
+          notes: { type: 'string', description: 'New notes. Pass an empty string to clear them.' },
+          is_active: { type: 'boolean', description: 'Set false to pause a subscription, or true to resume it.' },
+        },
+        required: ['subscription_identifier'],
       },
     },
   },
@@ -283,6 +327,34 @@ async function findSavingsPlan(
     .limit(1)
     .maybeSingle()
   return data ?? null
+}
+
+/** Resolve a subscription name or UUID to a row visible to this user via RLS. */
+async function findSubscription(
+  supabase: SupabaseClient,
+  identifier: string,
+): Promise<{ id: string; name: string } | null> {
+  if (UUID_RE.test(identifier)) {
+    const { data } = await supabase
+      .from('subscriptions')
+      .select('id, name')
+      .eq('id', identifier)
+      .maybeSingle()
+    return data ?? null
+  }
+  const { data } = await supabase
+    .from('subscriptions')
+    .select('id, name')
+    .ilike('name', identifier)
+    .limit(1)
+    .maybeSingle()
+  return data ?? null
+}
+
+function isValidSubscriptionDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
 // ─── Transaction helpers ─────────────────────────────────────────────────────
@@ -456,6 +528,126 @@ async function executeToolCall(
         ok: true,
         message: `Updated "${data.name}".`,
         data: { kind: 'savings_plan_updated', plan: data },
+      }
+    }
+
+    if (name === 'create_subscription') {
+      const subscriptionName = typeof args.name === 'string' ? args.name.trim().slice(0, 100) : ''
+      const amount = typeof args.amount === 'number' ? args.amount : NaN
+      const categoryInput = typeof args.category === 'string' ? args.category : ''
+      const sourceInput = typeof args.payment_source === 'string' ? args.payment_source : ''
+      const billingCycle = args.billing_cycle
+      const nextBillingDate = typeof args.next_billing_date === 'string' ? args.next_billing_date : ''
+      const notes = typeof args.notes === 'string' ? sanitizeHtml(args.notes.slice(0, 1000)) : null
+
+      if (!subscriptionName) return { ok: false, message: 'Refused: subscription name is required.' }
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000) {
+        return { ok: false, message: 'Refused: amount must be a positive number up to 1B.' }
+      }
+      if (billingCycle !== 'weekly' && billingCycle !== 'monthly' && billingCycle !== 'yearly') {
+        return { ok: false, message: 'Refused: billing cycle must be weekly, monthly, or yearly.' }
+      }
+      if (!isValidSubscriptionDate(nextBillingDate)) {
+        return { ok: false, message: 'Refused: next billing date must be a valid YYYY-MM-DD date.' }
+      }
+
+      const options = await fetchUserOptions(supabase)
+      const categoryId = resolveOptionId(categoryInput, options.categories)
+      if (!categoryId) {
+        return { ok: false, message: `I couldn't match the category "${categoryInput}". Your options: ${options.categories.map(c => c.name).join(', ')}.` }
+      }
+      const sourceId = resolveOptionId(sourceInput, options.paymentSources)
+      if (!sourceId) {
+        return { ok: false, message: `I couldn't match the payment method "${sourceInput}". Your options: ${options.paymentSources.map(s => s.name).join(', ')}.` }
+      }
+
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .insert([{
+          user_id: userId,
+          name: subscriptionName,
+          amount,
+          category: categoryId,
+          payment_source: sourceId,
+          billing_cycle: billingCycle,
+          next_billing_date: nextBillingDate,
+          notes,
+        }])
+        .select()
+        .single()
+      if (error || !data) {
+        return { ok: false, message: 'Failed to create subscription. Make sure the subscriptions SQL migration has been run.' }
+      }
+      return {
+        ok: true,
+        message: `Created ${billingCycle} subscription "${data.name}" for ${data.amount}; next bill is ${data.next_billing_date}.`,
+        data: { kind: 'subscription_created', subscription: data },
+      }
+    }
+
+    if (name === 'update_subscription') {
+      const identifier = typeof args.subscription_identifier === 'string'
+        ? args.subscription_identifier.trim()
+        : ''
+      if (!identifier) return { ok: false, message: 'Refused: subscription_identifier is required.' }
+      const subscription = await findSubscription(supabase, identifier)
+      if (!subscription) return { ok: false, message: `No subscription found matching "${identifier}".` }
+
+      const patch: Record<string, unknown> = {}
+      const rejected: string[] = []
+      if (typeof args.name === 'string' && args.name.trim()) patch.name = args.name.trim().slice(0, 100)
+      if (args.amount !== undefined) {
+        if (typeof args.amount === 'number' && args.amount > 0 && args.amount <= 1_000_000_000) patch.amount = args.amount
+        else rejected.push('amount (must be a number > 0 and ≤ 1B)')
+      }
+      const options = await fetchUserOptions(supabase)
+      if (args.category !== undefined) {
+        const categoryId = typeof args.category === 'string' ? resolveOptionId(args.category, options.categories) : null
+        if (categoryId) patch.category = categoryId
+        else rejected.push(`category "${String(args.category)}"`)
+      }
+      if (args.payment_source !== undefined) {
+        const sourceId = typeof args.payment_source === 'string' ? resolveOptionId(args.payment_source, options.paymentSources) : null
+        if (sourceId) patch.payment_source = sourceId
+        else rejected.push(`payment method "${String(args.payment_source)}"`)
+      }
+      if (args.billing_cycle !== undefined) {
+        if (args.billing_cycle === 'weekly' || args.billing_cycle === 'monthly' || args.billing_cycle === 'yearly') {
+          patch.billing_cycle = args.billing_cycle
+        } else {
+          rejected.push('billing cycle (must be weekly, monthly, or yearly)')
+        }
+      }
+      if (args.next_billing_date !== undefined) {
+        if (typeof args.next_billing_date === 'string' && isValidSubscriptionDate(args.next_billing_date)) {
+          patch.next_billing_date = args.next_billing_date
+        } else {
+          rejected.push('next billing date (must be a valid YYYY-MM-DD date)')
+        }
+      }
+      if (args.notes !== undefined) {
+        patch.notes = typeof args.notes === 'string' ? sanitizeHtml(args.notes.slice(0, 1000)) : null
+      }
+      if (typeof args.is_active === 'boolean') patch.is_active = args.is_active
+
+      if (Object.keys(patch).length === 0) {
+        return {
+          ok: false,
+          message: rejected.length ? `Couldn't apply: ${rejected.join(', ')}.` : 'Nothing to update — no valid fields were provided.',
+        }
+      }
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .update(patch)
+        .eq('id', subscription.id)
+        .select()
+        .single()
+      if (error || !data) return { ok: false, message: 'Failed to update subscription.' }
+      const ignored = rejected.length ? ` (ignored: ${rejected.join(', ')})` : ''
+      return {
+        ok: true,
+        message: `Updated subscription "${data.name}"${ignored}.`,
+        data: { kind: 'subscription_updated', subscription: data },
       }
     }
 
@@ -871,7 +1063,7 @@ export async function POST(request: NextRequest) {
         ? `\n\n${systemContext}`
         : ''
 
-    const systemPrompt = `You are Finn, the user's friendly personal-finance buddy living inside their Finance Tracker app. You see their transactions, savings goals, and current finances. Keep replies SHORT (1-3 sentences) unless they ask for detail. Be warm and casual — like texting a friend.
+    const systemPrompt = `You are Finn, the user's friendly personal-finance buddy living inside their Finance Tracker app. You see their transactions, savings goals, subscriptions, and current finances. Keep replies SHORT (1-3 sentences) unless they ask for detail. Be warm and casual — like texting a friend.
 
 You have tools to take actions on the user's behalf.
 
@@ -879,6 +1071,10 @@ Savings goals:
   • create_savings_plan — when they want a new goal
   • contribute_to_savings_plan — when they say "add X to Y" or "I just saved Z toward Y"
   • update_savings_plan — when they want to change a goal's name/target/date/notes
+
+Subscriptions:
+  • create_subscription — add a recurring expense when the user explicitly asks. It needs an amount, category, payment method, billing cycle, and next billing date. Ask for anything unclear; never invent a category or payment method. Creating a subscription does NOT log a transaction.
+  • update_subscription — edit an existing subscription's details, pause it, or resume it. Use the subscription UUID from context when possible; a unique name also works.
 
 Transactions (payments):
   • log_payment — record a new payment/expense or income (e.g., "log a $12 lunch on my Amex"). Needs an amount, a category, and a payment method. If any of those is missing or unclear, ASK — never invent a category or payment method the user didn't imply. Date defaults to today; type defaults to expense.

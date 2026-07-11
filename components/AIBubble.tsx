@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Transaction, SavingsPlan } from '@/types'
+import { Transaction, SavingsPlan, Subscription } from '@/types'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
 import { startOfMonth, endOfMonth, format } from 'date-fns'
@@ -26,9 +26,9 @@ import ReactMarkdown from 'react-markdown'
  *     and faster, default for casual chat).
  *
  * The chat endpoint (/api/ai-chat) can also TAKE ACTIONS via tool calling:
- * creating a savings goal, contributing to one, or updating its target. We
- * read the `tool_results` field of the response and fire a custom event so
- * other parts of the app (Savings tab, dashboard widget) can refresh.
+ * managing savings goals, transactions, and subscriptions. We read the
+ * `tool_results` field of the response and fire custom events so affected
+ * parts of the app refresh.
  */
 
 interface Message {
@@ -87,8 +87,8 @@ export default function AIBubble() {
   const inputRef = useRef<HTMLInputElement>(null)
 
   // ─── Context builder ───────────────────────────────────────────────────────
-  // Pulls a snapshot of the user's current finances + savings goals to feed
-  // the AI as system context. Kept compact so the prompt stays small.
+  // Pulls a compact snapshot of the user's finances, savings goals, and
+  // subscriptions to feed the AI as system context.
 
   const buildSystemContext = useCallback(async (): Promise<string> => {
     const now = new Date()
@@ -100,6 +100,7 @@ export default function AIBubble() {
       { data: catData },
       { data: srcData },
       { data: planData },
+      { data: subscriptionData },
     ] = await Promise.all([
       supabase
         .from('transactions')
@@ -114,6 +115,11 @@ export default function AIBubble() {
         .from('savings_plans')
         .select('id, name, target_amount, saved_amount, target_date, notes')
         .order('updated_at', { ascending: false }),
+      supabase
+        .from('subscriptions')
+        .select('id, name, amount, billing_cycle, next_billing_date, is_active')
+        .order('is_active', { ascending: false })
+        .order('next_billing_date', { ascending: true }),
     ])
 
     const transactions = (txData ?? []) as Transaction[]
@@ -160,6 +166,13 @@ export default function AIBubble() {
           return `  • [${p.id}] ${p.name}: ${formatCurrency(Number(p.saved_amount), currency)} of ${formatCurrency(Number(p.target_amount), currency)} (${pct.toFixed(0)}%)${dateNote}`
         }).join('\n')
 
+    const subscriptions = (subscriptionData ?? []) as Subscription[]
+    const subscriptionLines = subscriptions.length === 0
+      ? '  (none yet)'
+      : subscriptions.map(subscription =>
+          `  • [${subscription.id}] ${subscription.name}: ${formatCurrency(Number(subscription.amount), currency)} ${subscription.billing_cycle}, next ${subscription.next_billing_date} (${subscription.is_active ? 'active' : 'paused'})`
+        ).join('\n')
+
     return [
       `Today: ${format(now, 'yyyy-MM-dd')}.`,
       `User's currency: ${currency}.`,
@@ -180,6 +193,9 @@ export default function AIBubble() {
       ``,
       `Savings goals (use the bracketed UUID as plan_identifier for tool calls when possible — name also works):`,
       planLines,
+      ``,
+      `Subscriptions (use the bracketed UUID as subscription_identifier for tool calls when possible — name also works):`,
+      subscriptionLines,
     ].join('\n')
   }, [currency])
 
@@ -335,6 +351,9 @@ export default function AIBubble() {
         if (kinds.some(k => k.startsWith('savings_plan'))) {
           window.dispatchEvent(new CustomEvent('finn:savings-changed'))
         }
+        if (kinds.some(k => k.startsWith('subscription_'))) {
+          window.dispatchEvent(new CustomEvent('finn:subscriptions-changed'))
+        }
         const txKinds = new Set(['transaction_logged', 'transaction_updated', 'transaction_deleted'])
         if (kinds.some(k => txKinds.has(k))) {
           window.dispatchEvent(new CustomEvent('finn:transactions-changed'))
@@ -427,7 +446,7 @@ export default function AIBubble() {
             {messages.length === 0 ? (
               <div className="text-center text-sm text-muted-foreground py-10 px-4">
                 <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                <p>Hey! Ask me about your spending, or tell me to set a savings goal — like &quot;save $3000 for Hawaii by August&quot;.</p>
+                <p>Hey! Ask me about spending, savings goals, or subscriptions — like &quot;add Netflix at $16 monthly on Amex&quot;.</p>
               </div>
             ) : (
               messages.map((msg, i) => (

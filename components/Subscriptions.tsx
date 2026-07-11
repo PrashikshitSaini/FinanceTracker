@@ -116,6 +116,14 @@ export default function Subscriptions() {
     fetchData()
   }, [fetchData])
 
+  // Finn dispatches this after it creates or edits a subscription through a
+  // tool call, so the tab updates without requiring a page refresh.
+  useEffect(() => {
+    const handler = () => fetchData()
+    window.addEventListener('finn:subscriptions-changed', handler)
+    return () => window.removeEventListener('finn:subscriptions-changed', handler)
+  }, [fetchData])
+
   const activeSubscriptions = useMemo(
     () => subscriptions.filter(subscription => subscription.is_active),
     [subscriptions]
