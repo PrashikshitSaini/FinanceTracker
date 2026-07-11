@@ -35,6 +35,7 @@ Whether you're managing daily expenses, tracking income, analyzing spending patt
 - **Transaction Notes** - Add detailed notes to each transaction for better record-keeping
 - **Category Management** - Organize transactions with customizable categories and color coding
 - **Payment Source Tracking** - Monitor spending across different payment methods (cash, credit cards, digital wallets)
+- **Subscription Tracking** - Manage active recurring expenses and record each payment directly into transaction history
 - **Secure Authentication** - Sign in securely with Google OAuth via Supabase
 - **Dark Mode Interface** - Beautiful, eye-friendly dark theme for comfortable viewing
 - **Fully Responsive** - Works seamlessly on desktop, tablet, and mobile devices
@@ -106,6 +107,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 4. Set up Supabase:
    - Create a new project at [supabase.com](https://supabase.com)
    - Run the SQL schema from `supabase-schema.sql` in the SQL Editor
+   - For native subscription tracking, also run [docs/sql/2026-07-11-subscriptions.sql](docs/sql/2026-07-11-subscriptions.sql)
    - Create a storage bucket named `receipts` (make it public)
    - Enable Google OAuth in Authentication settings
 

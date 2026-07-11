@@ -3,6 +3,8 @@ export interface Transaction {
   amount: number
   category: string
   payment_source: string
+  /** Set when this entry was recorded from the subscriptions area. */
+  subscription_id?: string | null
   notes?: string
   image_url?: string
   date: string
@@ -43,3 +45,23 @@ export interface SavingsPlan {
   updated_at: string
 }
 
+export type SubscriptionBillingCycle = 'weekly' | 'monthly' | 'yearly'
+
+/**
+ * A recurring expense. Recording a payment from the subscription view creates
+ * a normal expense transaction with this subscription's id attached to it.
+ */
+export interface Subscription {
+  id: string
+  user_id: string
+  name: string
+  amount: number
+  category: string
+  payment_source: string
+  billing_cycle: SubscriptionBillingCycle
+  next_billing_date: string
+  is_active: boolean
+  notes: string | null
+  created_at: string
+  updated_at: string
+}

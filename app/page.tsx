@@ -8,7 +8,7 @@ import CalendarView from '@/components/CalendarView'
 import Auth from '@/components/Auth'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Wallet, Calendar, BarChart3, LogOut, User, Target } from 'lucide-react'
+import { Wallet, Calendar, BarChart3, LogOut, User, Target, Repeat } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import CurrencySelector from '@/components/CurrencySelector'
@@ -17,6 +17,7 @@ import PaymentSources from '@/components/PaymentSources'
 import NotificationSettings from '@/components/NotificationSettings'
 import HeaderMoreMenu from '@/components/HeaderMoreMenu'
 import Savings from '@/components/Savings'
+import Subscriptions from '@/components/Subscriptions'
 import AIBubble from '@/components/AIBubble'
 import {
   Dialog,
@@ -174,7 +175,7 @@ export default function Home() {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-6">
+          <TabsList className="grid w-full grid-cols-5 mb-6">
             <TabsTrigger value="dashboard" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Dashboard</span>
@@ -191,10 +192,17 @@ export default function Home() {
               <Target className="h-4 w-4" />
               <span className="hidden sm:inline">Savings</span>
             </TabsTrigger>
+            <TabsTrigger value="subscriptions" className="flex items-center gap-2">
+              <Repeat className="h-4 w-4" />
+              <span className="hidden sm:inline">Subscriptions</span>
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
-            <Dashboard onNavigateToSavings={() => setActiveTab('savings')} />
+            <Dashboard
+              onNavigateToSavings={() => setActiveTab('savings')}
+              onNavigateToSubscriptions={() => setActiveTab('subscriptions')}
+            />
           </TabsContent>
 
           <TabsContent value="calendar">
@@ -210,6 +218,10 @@ export default function Home() {
 
           <TabsContent value="savings">
             <Savings />
+          </TabsContent>
+
+          <TabsContent value="subscriptions">
+            <Subscriptions />
           </TabsContent>
         </Tabs>
       </main>
@@ -254,4 +266,3 @@ export default function Home() {
     </div>
   )
 }
-

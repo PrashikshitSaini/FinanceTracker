@@ -64,8 +64,16 @@ export async function POST(request: NextRequest) {
       )
 
     if (error) {
-      if (process.env.NODE_ENV === 'development') console.error('subscribe upsert error:', error.message)
-      return NextResponse.json({ error: 'Failed to save subscription.' }, { status: 500 })
+      // Always log (not dev-only) so Vercel function logs show the cause.
+      console.error('subscribe upsert error:', error.code, error.message)
+      // 42P01 = undefined_table → the migration hasn't been run yet. Surface a
+      // specific, actionable message instead of a generic 500 so this is
+      // diagnosable without server access.
+      const missingTable = error.code === '42P01'
+      return NextResponse.json(
+        { error: missingTable ? 'The push_subscriptions table is missing — run the SQL migration in Supabase.' : 'Failed to save subscription.' },
+        { status: missingTable ? 503 : 500 },
+      )
     }
     return NextResponse.json({ success: true }, { status: 201 })
   } catch (err) {

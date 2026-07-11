@@ -22,9 +22,15 @@ interface DashboardProps {
    * Passed through from the page so clicking jumps to the Savings tab.
    */
   onNavigateToSavings?: () => void
+  /** Optional handler for the subscriptions shortcut card. */
+  onNavigateToSubscriptions?: () => void
 }
 
-export default function Dashboard({ showTableOnly = false, onNavigateToSavings }: DashboardProps) {
+export default function Dashboard({
+  showTableOnly = false,
+  onNavigateToSavings,
+  onNavigateToSubscriptions,
+}: DashboardProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [loading, setLoading] = useState(true)
@@ -421,22 +427,18 @@ export default function Dashboard({ showTableOnly = false, onNavigateToSavings }
               <div className="flex-1 min-w-0">
                 <h3 className="text-base sm:text-lg font-semibold mb-1">Track Your Subscriptions</h3>
                 <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                  Manage your recurring subscriptions with Ghost Sub tracker. Get weekly digests and never forget to cancel unused services.
+                  Keep active recurring expenses in one place. Recording a payment adds it to your regular transaction history too.
                 </p>
               </div>
             </div>
-            <a
-              href="https://ghost-sub-tracker.vercel.app/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full sm:w-auto flex-shrink-0"
+            <Button
+              onClick={onNavigateToSubscriptions}
+              className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center gap-2 text-sm sm:text-base px-4 py-2 sm:px-4 sm:py-2"
             >
-              <Button className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center gap-2 text-sm sm:text-base px-4 py-2 sm:px-4 sm:py-2">
-                <span className="hidden sm:inline">Open Ghost Sub Tracker</span>
-                <span className="sm:hidden">Open Sub Tracker</span>
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </a>
+              <span className="hidden sm:inline">Manage Subscriptions</span>
+              <span className="sm:hidden">Subscriptions</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -525,4 +527,3 @@ export default function Dashboard({ showTableOnly = false, onNavigateToSavings }
     </div>
   )
 }
-

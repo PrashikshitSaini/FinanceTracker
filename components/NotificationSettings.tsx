@@ -92,7 +92,10 @@ export default function NotificationSettings() {
         }),
       })
       if (!res.ok) {
-        setMessage('Could not save your subscription. Please try again.')
+        const info = await res.json().catch(() => ({}))
+        setMessage(
+          `Could not save your subscription (${res.status}${info?.error ? `: ${info.error}` : ''}).`,
+        )
         setStatus('off')
         return
       }
