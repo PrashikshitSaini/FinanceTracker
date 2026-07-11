@@ -7,9 +7,10 @@ export const dynamic = 'force-dynamic'
 /**
  * GET /api/push/send-daily — Vercel Cron entry point (see vercel.json).
  *
- * For every user with a push subscription, computes their month-to-date
- * spending and sends a single "standing" summary notification (stable tag, so
- * each day's send replaces yesterday's in the tray rather than stacking).
+ * First records all active subscription charges due today, then—for every user
+ * with a push subscription—computes month-to-date spending and sends one
+ * standing summary notification (stable tag, so each day's send replaces the
+ * previous day's in the tray rather than stacking).
  *
  * Auth: Vercel Cron automatically sends `Authorization: Bearer $CRON_SECRET`
  * when the CRON_SECRET env var is set — we reject anything else so the endpoint
@@ -32,16 +33,35 @@ export async function GET(request: NextRequest) {
     if (!cronSecret || request.headers.get('authorization') !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 })
     }
-    if (!isPushConfigured()) {
-      return NextResponse.json({ error: 'Push is not configured.' }, { status: 503 })
-    }
-
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!supabaseUrl || !serviceRoleKey) {
       return NextResponse.json({ error: 'Server misconfigured.' }, { status: 500 })
     }
     const headers = { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` }
+
+    // Process scheduled charges before calculating the daily spend total so a
+    // subscription due today is reflected in the notification too. The SQL
+    // function is atomic and de-duplicates by (subscription_id, date), so this
+    // remains safe if Vercel retries a cron invocation.
+    const dueResponse = await fetch(`${supabaseUrl}/rest/v1/rpc/process_due_subscriptions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    if (!dueResponse.ok) {
+      console.error('Daily cron: process_due_subscriptions failed:', dueResponse.status)
+      return NextResponse.json({ error: 'Failed to process due subscriptions.' }, { status: 500 })
+    }
+    const dueRows = await dueResponse.json() as Array<{ processed_count?: number }>
+    const subscriptionsProcessed = dueRows[0]?.processed_count ?? 0
+
+    // Subscription automation should not depend on web-push being configured.
+    // Returning success here lets the job continue to run for users who only
+    // use the finance tracker, without push notifications enabled.
+    if (!isPushConfigured()) {
+      return NextResponse.json({ success: true, subscriptions_processed: subscriptionsProcessed, users: 0, sent: 0 })
+    }
 
     // 1) All subscriptions, grouped by user. `limit` guards against PostgREST's
     //    default 1000-row cap; well above any realistic near-term device count.
@@ -55,7 +75,7 @@ export async function GET(request: NextRequest) {
     }
     const rows = (await subsRes.json()) as Array<StoredSubscription & { user_id: string }>
     if (!Array.isArray(rows) || rows.length === 0) {
-      return NextResponse.json({ success: true, users: 0, sent: 0 }, { status: 200 })
+      return NextResponse.json({ success: true, subscriptions_processed: subscriptionsProcessed, users: 0, sent: 0 }, { status: 200 })
     }
 
     const byUser = new Map<string, StoredSubscription[]>()
@@ -114,7 +134,13 @@ export async function GET(request: NextRequest) {
       ).catch(() => {})
     }
 
-    return NextResponse.json({ success: true, users: byUser.size, sent, pruned: deadEndpoints.length }, { status: 200 })
+    return NextResponse.json({
+      success: true,
+      subscriptions_processed: subscriptionsProcessed,
+      users: byUser.size,
+      sent,
+      pruned: deadEndpoints.length,
+    }, { status: 200 })
   } catch (err) {
     console.error('GET /api/push/send-daily error:', err instanceof Error ? err.message : 'Unknown error')
     return NextResponse.json({ error: 'Failed to send daily summaries.' }, { status: 500 })

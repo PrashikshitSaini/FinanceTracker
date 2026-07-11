@@ -1,8 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { addDays, addMonths, addYears, format, isBefore, isValid, startOfDay } from 'date-fns'
-import { AlertTriangle, CalendarDays, CheckCircle2, Pencil, Play, Plus, Repeat, Trash2, Pause } from 'lucide-react'
+import { format, isBefore, isValid, startOfDay } from 'date-fns'
+import { AlertTriangle, CalendarDays, Pencil, Play, Plus, Repeat, Trash2, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -26,30 +26,12 @@ type SubscriptionDialog =
   | { kind: 'closed' }
   | { kind: 'create' }
   | { kind: 'edit'; subscription: Subscription }
-  | { kind: 'record'; subscription: Subscription }
   | { kind: 'delete'; subscription: Subscription }
 
 const billingCycleLabels: Record<SubscriptionBillingCycle, string> = {
   weekly: 'Weekly',
   monthly: 'Monthly',
   yearly: 'Yearly',
-}
-
-function nextBillingDate(date: string, cycle: SubscriptionBillingCycle): string {
-  let next = parseLocalDate(date)
-  const today = startOfDay(new Date())
-
-  // If a bill is overdue, advance through missed intervals so the resulting
-  // date is always the next upcoming charge instead of another past date.
-  while (!isBefore(today, next)) {
-    next = cycle === 'weekly'
-      ? addDays(next, 7)
-      : cycle === 'monthly'
-        ? addMonths(next, 1)
-        : addYears(next, 1)
-  }
-
-  return format(next, 'yyyy-MM-dd')
 }
 
 function monthlyCost(subscription: Subscription): number {
@@ -60,9 +42,9 @@ function monthlyCost(subscription: Subscription): number {
 }
 
 /**
- * Native recurring-expense tracker. A subscription is a plan, while each
- * actual charge is a regular `transactions` row linked by `subscription_id`.
- * That keeps financial reporting honest: planned charges never inflate totals.
+ * Native recurring-expense tracker. A protected daily server job creates each
+ * due active subscription charge as a regular linked transaction, so planned
+ * charges do not inflate totals before their scheduled date.
  */
 export default function Subscriptions() {
   const { currency } = useCurrency()
@@ -73,7 +55,6 @@ export default function Subscriptions() {
   const [error, setError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<SubscriptionDialog>({ kind: 'closed' })
   const [saving, setSaving] = useState(false)
-  const [recording, setRecording] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   const [name, setName] = useState('')
@@ -162,7 +143,7 @@ export default function Subscriptions() {
   }
 
   const closeDialog = () => {
-    if (saving || recording || deleting) return
+    if (saving || deleting) return
     setDialog({ kind: 'closed' })
     setFormError(null)
   }
@@ -220,53 +201,6 @@ export default function Subscriptions() {
     fetchData()
   }
 
-  const recordPayment = async () => {
-    if (dialog.kind !== 'record') return
-    const subscription = dialog.subscription
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      setFormError('You need to be signed in to record a payment.')
-      return
-    }
-
-    setRecording(true)
-    setFormError(null)
-    const { error: transactionError } = await supabase
-      .from('transactions')
-      .insert([{
-        user_id: user.id,
-        amount: Number(subscription.amount),
-        type: 'expense',
-        category: subscription.category,
-        payment_source: subscription.payment_source,
-        subscription_id: subscription.id,
-        date: getLocalTodayISO(),
-        notes: `Subscription: ${subscription.name}`,
-      }])
-
-    if (transactionError) {
-      setRecording(false)
-      setFormError('Failed to add the payment to your transactions. Please try again.')
-      return
-    }
-
-    const newNextDate = nextBillingDate(subscription.next_billing_date, subscription.billing_cycle)
-    const { error: subscriptionError } = await supabase
-      .from('subscriptions')
-      .update({ next_billing_date: newNextDate })
-      .eq('id', subscription.id)
-
-    setRecording(false)
-    if (subscriptionError) {
-      setFormError('Payment recorded, but the next billing date could not be updated. Please edit the subscription date.')
-      return
-    }
-
-    window.dispatchEvent(new Event('finn:transactions-changed'))
-    setDialog({ kind: 'closed' })
-    fetchData()
-  }
-
   const toggleActive = async (subscription: Subscription) => {
     setError(null)
     const { error: updateError } = await supabase
@@ -314,7 +248,7 @@ export default function Subscriptions() {
             Subscriptions
           </h2>
           <p className="text-sm text-muted-foreground">
-            Manage recurring expenses. Recording a payment also adds it to Transactions.
+            Active subscriptions are added to Transactions automatically on each due date.
           </p>
         </div>
         <Button onClick={openCreate}>
@@ -391,11 +325,6 @@ export default function Subscriptions() {
                   </div>
                   {subscription.notes && <p className="text-sm text-muted-foreground line-clamp-2">{subscription.notes}</p>}
                   <div className="flex flex-wrap gap-2 pt-1">
-                    {subscription.is_active && (
-                      <Button size="sm" onClick={() => { setFormError(null); setDialog({ kind: 'record', subscription }) }}>
-                        <CheckCircle2 className="h-4 w-4 mr-1" /> Record payment
-                      </Button>
-                    )}
                     <Button size="sm" variant="outline" onClick={() => toggleActive(subscription)}>
                       {subscription.is_active
                         ? <><Pause className="h-4 w-4 mr-1" /> Pause</>
@@ -466,23 +395,6 @@ export default function Subscriptions() {
           <DialogFooter>
             <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={saveSubscription} disabled={saving}>{saving ? 'Saving…' : 'Save Subscription'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={dialog.kind === 'record'} onOpenChange={open => { if (!open) closeDialog() }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Record subscription payment</DialogTitle></DialogHeader>
-          {dialog.kind === 'record' && (
-            <div className="space-y-2 text-sm text-muted-foreground">
-              <p>This adds a {formatCurrency(Number(dialog.subscription.amount), currency)} expense for <strong className="text-foreground">{dialog.subscription.name}</strong> to today&apos;s transactions.</p>
-              <p>Its next billing date will move to {format(parseLocalDate(nextBillingDate(dialog.subscription.next_billing_date, dialog.subscription.billing_cycle)), 'MMM d, yyyy')}.</p>
-              {formError && <p className="text-destructive">{formError}</p>}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={closeDialog}>Cancel</Button>
-            <Button onClick={recordPayment} disabled={recording}>{recording ? 'Recording…' : 'Record Payment'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

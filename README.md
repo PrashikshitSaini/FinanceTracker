@@ -35,7 +35,7 @@ Whether you're managing daily expenses, tracking income, analyzing spending patt
 - **Transaction Notes** - Add detailed notes to each transaction for better record-keeping
 - **Category Management** - Organize transactions with customizable categories and color coding
 - **Payment Source Tracking** - Monitor spending across different payment methods (cash, credit cards, digital wallets)
-- **Subscription Tracking** - Manage active recurring expenses and record each payment directly into transaction history
+- **Subscription Tracking** - Manage active recurring expenses; each due payment is automatically recorded in transaction history
 - **Secure Authentication** - Sign in securely with Google OAuth via Supabase
 - **Dark Mode Interface** - Beautiful, eye-friendly dark theme for comfortable viewing
 - **Fully Responsive** - Works seamlessly on desktop, tablet, and mobile devices

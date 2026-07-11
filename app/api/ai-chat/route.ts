@@ -124,7 +124,7 @@ const TOOLS = [
     function: {
       name: 'create_subscription',
       description:
-        'Create a recurring expense subscription. Use only when the user explicitly asks to add a subscription. A subscription is a planned recurring expense; it does not create a transaction until the user records a payment.',
+        'Create a recurring expense subscription. Use only when the user explicitly asks to add a subscription. A subscription is a planned recurring expense; its charge is automatically logged as a transaction on each due date.',
       parameters: {
         type: 'object',
         properties: {
@@ -1073,7 +1073,7 @@ Savings goals:
   • update_savings_plan — when they want to change a goal's name/target/date/notes
 
 Subscriptions:
-  • create_subscription — add a recurring expense when the user explicitly asks. It needs an amount, category, payment method, billing cycle, and next billing date. Ask for anything unclear; never invent a category or payment method. Creating a subscription does NOT log a transaction.
+  • create_subscription — add a recurring expense when the user explicitly asks. It needs an amount, category, payment method, billing cycle, and next billing date. Ask for anything unclear; never invent a category or payment method. Its charge is automatically logged on each due date.
   • update_subscription — edit an existing subscription's details, pause it, or resume it. Use the subscription UUID from context when possible; a unique name also works.
 
 Transactions (payments):

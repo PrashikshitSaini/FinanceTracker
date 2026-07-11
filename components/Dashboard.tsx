@@ -427,7 +427,7 @@ export default function Dashboard({
               <div className="flex-1 min-w-0">
                 <h3 className="text-base sm:text-lg font-semibold mb-1">Track Your Subscriptions</h3>
                 <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                  Keep active recurring expenses in one place. Recording a payment adds it to your regular transaction history too.
+                  Keep active recurring expenses in one place. Due charges are added to your regular transaction history automatically.
                 </p>
               </div>
             </div>
