@@ -283,7 +283,110 @@ export default function Dashboard({
             </div>
           )}
         </div>
-        <div className="overflow-x-auto">
+        {/* Mobile: stacked cards instead of the table — no horizontal scroll.
+            Same data and actions as the desktop table below. */}
+        <div className="md:hidden space-y-2">
+          {loading ? (
+            <p className="p-4 text-center text-muted-foreground">Loading...</p>
+          ) : transactions.length === 0 ? (
+            <p className="p-4 text-center text-muted-foreground">No transactions found</p>
+          ) : (
+            transactions.map((transaction) => {
+              const selected = selectMode && selectedIds.has(transaction.id)
+              return (
+                <div
+                  key={transaction.id}
+                  className={`rounded-lg border p-3 ${selected ? 'bg-muted/50 border-ring' : 'bg-card'}`}
+                >
+                  <div className="flex items-start gap-2">
+                    {selectMode && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select transaction from ${format(parseLocalDate(transaction.date), 'MMM dd')}`}
+                        className="mt-1"
+                        checked={selectedIds.has(transaction.id)}
+                        onChange={() => toggleSelected(transaction.id)}
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Tapping the category name opens the same inline
+                            dropdown as the desktop table, so re-categorizing
+                            stays possible without the Edit dialog. */}
+                        <select
+                          value={transaction.category}
+                          onChange={e => updateTransactionCategory(transaction.id, e.target.value)}
+                          disabled={updatingCategoryId === transaction.id}
+                          aria-label="Change category"
+                          className="bg-background rounded text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring max-w-[160px] disabled:opacity-50"
+                        >
+                          {!categories.some(c => c.id === transaction.category) && (
+                            <option value={transaction.category}>
+                              {categoryMap[transaction.category] || transaction.category}
+                            </option>
+                          )}
+                          {categories.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        <span className={`px-2 py-0.5 rounded text-xs ${
+                          transaction.type === 'income'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {transaction.type}
+                        </span>
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-1">
+                        {format(parseLocalDate(transaction.date), 'MMM dd, yyyy')}
+                        {transaction.created_at && (
+                          <> &middot; {format(new Date(transaction.created_at), 'h:mm a')}</>
+                        )}
+                        {paymentSourceMap[transaction.payment_source] && (
+                          <> &middot; {paymentSourceMap[transaction.payment_source]}</>
+                        )}
+                      </div>
+                      {transaction.notes && (
+                        <div className="text-sm text-muted-foreground mt-0.5 truncate">
+                          {transaction.notes}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <span className={`font-semibold ${
+                        transaction.type === 'income' ? 'text-green-600' : ''
+                      }`}>
+                        {formatCurrency(transaction.amount, currency)}
+                      </span>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => setEditingTransaction(transaction)}
+                          title="Edit transaction"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => deleteTransaction(transaction.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {/* Desktop / tablet: full table with all columns. */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b">
