@@ -218,6 +218,87 @@ async function findExistingByClientRef(params: {
 }
 
 /**
+ * Fuzzy-duplicate backstop for the MacroDroid path.
+ *
+ * The client builds client_ref as `wallet_<amount>_<card>_<notification_when>`.
+ * When Android re-posts the same notification, `notification_when` changes, so
+ * the exact-match idempotency lookup misses and a duplicate row gets inserted.
+ *
+ * This catches that case: if the same user already logged a transaction with
+ * the identical amount and date whose created_at is within DUPLICATE_WINDOW_MS,
+ * treat the new request as an idempotent retry. Only consulted when the caller
+ * supplied a client_ref (i.e., an automation client), so manual/web adds and
+ * legitimate same-amount purchases made minutes apart by humans are unaffected.
+ */
+const DUPLICATE_WINDOW_MS = 5 * 60 * 1000
+
+async function findRecentDuplicate(params: {
+  userId: string
+  amount: number
+  date: string
+  accessToken: string | null
+  apiKeyAuth: boolean
+}): Promise<unknown | null> {
+  const { userId, amount, date, accessToken, apiKeyAuth } = params
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey) return null
+
+  const cutoff = new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString()
+  const url =
+    `${supabaseUrl}/rest/v1/transactions` +
+    `?user_id=eq.${encodeURIComponent(userId)}` +
+    `&amount=eq.${amount}` +
+    `&date=eq.${encodeURIComponent(date)}` +
+    `&created_at=gte.${cutoff}` +
+    `&select=*&limit=1`
+
+  try {
+    if (apiKeyAuth) {
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return null
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${serviceRoleKey}`, 'apikey': serviceRoleKey },
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    }
+
+    if (accessToken) {
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'apikey': supabaseKey },
+      })
+      if (!res.ok) return null
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    }
+
+    const cookieStore = await cookies()
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookies: {
+        get(name: string) { return cookieStore.get(name)?.value },
+        set(name: string, value: string, options: any) { cookieStore.set({ name, value, ...options }) },
+        remove(name: string, options: any) { cookieStore.set({ name, value: '', ...options }) },
+      },
+    })
+    const { data } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('amount', amount)
+      .eq('date', date)
+      .gte('created_at', cutoff)
+      .limit(1)
+      .maybeSingle()
+    return data ?? null
+  } catch (err) {
+    console.error('recent-duplicate lookup error:', err instanceof Error ? err.message : 'Unknown error')
+    return null
+  }
+}
+
+/**
  * POST /api/quick-add
  * Two modes for adding transactions:
  *
@@ -909,6 +990,26 @@ Return ONLY a valid JSON object — no markdown, no explanation:
       // null when no client_ref was provided — Postgres skips the partial
       // unique index for NULL values, so legacy callers are unaffected.
       client_ref: clientRef,
+    }
+
+    // Fuzzy-duplicate backstop (automation clients only): exact client_ref
+    // missed but an identical amount+date row was logged seconds ago — almost
+    // certainly a re-posted notification with a fresh notification_when
+    // timestamp baked into the ref. Return the prior row instead of inserting.
+    if (clientRef) {
+      const recentDuplicate = await findRecentDuplicate({
+        userId: user.id,
+        amount: insertPayload.amount,
+        date: insertPayload.date,
+        accessToken,
+        apiKeyAuth,
+      })
+      if (recentDuplicate) {
+        return NextResponse.json(
+          { success: true, mode: 'idempotent', data: recentDuplicate },
+          { status: 200 }
+        )
+      }
     }
 
     // --- Insert transaction ---

@@ -46,6 +46,11 @@ export default function Dashboard({
   // and re-uses the same form for both add and edit flows, so we just hand
   // it a transaction and open it.
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
+  // Bulk-delete mode: toggled by the "Select" button above the table. While
+  // active each row shows a checkbox; the header bar offers Delete/Cancel.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deletingSelected, setDeletingSelected] = useState(false)
   const { currency } = useCurrency()
 
   useEffect(() => {
@@ -168,6 +173,44 @@ export default function Dashboard({
     }
   }
 
+  const toggleSelected = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const exitSelectMode = () => {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  const deleteSelectedTransactions = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} selected transaction${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return
+
+    setDeletingSelected(true)
+    // RLS in the DB scopes this to the authenticated user's own rows.
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .in('id', ids)
+    setDeletingSelected(false)
+
+    if (error) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Error deleting transactions:', error.message || 'Unknown error')
+      }
+      alert('Error deleting transactions')
+    } else {
+      exitSelectMode()
+      loadTransactions()
+    }
+  }
+
   const totalIncome = transactions
     .filter(t => t.type === 'income')
     .reduce((sum, t) => sum + t.amount, 0)
@@ -211,35 +254,93 @@ export default function Dashboard({
   if (showTableOnly) {
     return (
       <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          {selectMode ? (
+            <>
+              <span className="text-sm text-muted-foreground">
+                {selectedIds.size} selected
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={selectedIds.size === 0 || deletingSelected}
+                  onClick={deleteSelectedTransactions}
+                >
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Delete selected
+                </Button>
+                <Button variant="outline" size="sm" onClick={exitSelectMode} disabled={deletingSelected}>
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-end w-full">
+              <Button variant="outline" size="sm" onClick={() => setSelectMode(true)}>
+                Select
+              </Button>
+            </div>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b">
+                {selectMode && (
+                  <th className="text-left p-2 w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all"
+                      checked={transactions.length > 0 && selectedIds.size === transactions.length}
+                      onChange={(e) =>
+                        setSelectedIds(
+                          e.target.checked ? new Set(transactions.map(t => t.id)) : new Set()
+                        )
+                      }
+                    />
+                  </th>
+                )}
                 <th className="text-left p-2">Date</th>
                 <th className="text-left p-2">Type</th>
                 <th className="text-left p-2">Category</th>
-                <th className="text-left p-2">Payment Source</th>
+                <th className="hidden md:table-cell text-left p-2">Payment Source</th>
                 <th className="text-left p-2">Amount</th>
-                <th className="text-left p-2">Notes</th>
+                <th className="hidden lg:table-cell text-left p-2">Notes</th>
                 <th className="text-left p-2">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="p-4 text-center text-muted-foreground">
+                  <td colSpan={selectMode ? 8 : 7} className="p-4 text-center text-muted-foreground">
                     Loading...
                   </td>
                 </tr>
               ) : transactions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-4 text-center text-muted-foreground">
+                  <td colSpan={selectMode ? 8 : 7} className="p-4 text-center text-muted-foreground">
                     No transactions found
                   </td>
                 </tr>
               ) : (
                 transactions.map((transaction) => (
-                  <tr key={transaction.id} className="border-b hover:bg-muted/50">
+                  <tr
+                    key={transaction.id}
+                    className={`border-b hover:bg-muted/50 ${
+                      selectMode && selectedIds.has(transaction.id) ? 'bg-muted/50' : ''
+                    }`}
+                  >
+                    {selectMode && (
+                      <td className="p-2 w-8">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select transaction from ${format(parseLocalDate(transaction.date), 'MMM dd')}`}
+                          checked={selectedIds.has(transaction.id)}
+                          onChange={() => toggleSelected(transaction.id)}
+                        />
+                      </td>
+                    )}
                     <td className="p-2 whitespace-nowrap">
                       <div>{format(parseLocalDate(transaction.date), 'MMM dd, yyyy')}</div>
                       {transaction.created_at && (
@@ -263,7 +364,7 @@ export default function Dashboard({
                         onChange={e => updateTransactionCategory(transaction.id, e.target.value)}
                         disabled={updatingCategoryId === transaction.id}
                         aria-label="Change category"
-                        className="bg-background border border-input rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-w-[180px] disabled:opacity-50"
+                        className="bg-background border border-input rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-w-[130px] md:max-w-[180px] disabled:opacity-50"
                       >
                         {/* Fallback: if the current category isn't in the list
                             (e.g., row's category was deleted globally), show
@@ -279,7 +380,7 @@ export default function Dashboard({
                         ))}
                       </select>
                     </td>
-                    <td className="p-2 text-sm">
+                    <td className="hidden md:table-cell p-2 text-sm">
                       {paymentSourceMap[transaction.payment_source] || (
                         <span className="text-muted-foreground">—</span>
                       )}
@@ -287,7 +388,7 @@ export default function Dashboard({
                     <td className="p-2 font-semibold">
                       {formatCurrency(transaction.amount, currency)}
                     </td>
-                    <td className="p-2 text-sm text-muted-foreground max-w-xs truncate">
+                    <td className="hidden lg:table-cell p-2 text-sm text-muted-foreground max-w-xs truncate">
                       {transaction.notes || '-'}
                     </td>
                     <td className="p-2">
