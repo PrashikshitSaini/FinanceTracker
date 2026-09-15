@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { createHash, createHmac } from 'crypto'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { sanitizeHtml } from '@/lib/validation'
+import { transactionSchema } from '@/lib/validation'
 
 /**
  * PATCH /api/transactions/[id]
@@ -217,10 +218,10 @@ async function fetchTransaction(
 
   try {
     if (auth.apiKeyAuth) {
-      const userJwt = signUserJwt(userId)
-      if (!userJwt) return null
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${userJwt}`, 'apikey': supabaseKey },
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return null
+      const res = await fetch(`${url}&user_id=eq.${encodeURIComponent(userId)}`, {
+        headers: { 'Authorization': `Bearer ${serviceRoleKey}`, 'apikey': serviceRoleKey },
       })
       if (!res.ok) return null
       const rows = await res.json()
@@ -274,13 +275,13 @@ async function applyPatch(
 
   try {
     if (auth.apiKeyAuth) {
-      const userJwt = signUserJwt(userId)
-      if (!userJwt) return null
-      const res = await fetch(url, {
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return null
+      const res = await fetch(`${url}&user_id=eq.${encodeURIComponent(userId)}`, {
         method: 'PATCH',
         headers: {
-          'Authorization': `Bearer ${userJwt}`,
-          'apikey': supabaseKey,
+          'Authorization': `Bearer ${serviceRoleKey}`,
+          'apikey': serviceRoleKey,
           'Content-Type': 'application/json',
           'Prefer': 'return=representation',
         },
@@ -336,6 +337,75 @@ async function applyPatch(
   } catch (err) {
     console.error('transaction patch error:', err instanceof Error ? err.message : 'Unknown error')
     return null
+  }
+}
+
+/** Delete one owned transaction and report whether a row was removed. */
+async function deleteTransaction(
+  transactionId: string,
+  auth: AuthResult
+): Promise<boolean> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey || !auth.user) return false
+
+  try {
+    if (auth.apiKeyAuth) {
+      // API keys identify a user but are not Supabase JWTs. Service-role is
+      // safe here because both immutable filters are supplied explicitly.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!serviceRoleKey) return false
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/transactions?id=eq.${encodeURIComponent(transactionId)}&user_id=eq.${encodeURIComponent(auth.user.id)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${serviceRoleKey}`,
+            'apikey': serviceRoleKey,
+            'Prefer': 'return=representation',
+          },
+        }
+      )
+      if (!res.ok) return false
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length === 1
+    }
+
+    if (auth.accessToken) {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/transactions?id=eq.${encodeURIComponent(transactionId)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${auth.accessToken}`,
+            'apikey': supabaseKey,
+            'Prefer': 'return=representation',
+          },
+        }
+      )
+      if (!res.ok) return false
+      const rows = await res.json()
+      return Array.isArray(rows) && rows.length === 1
+    }
+
+    const cookieStore = await cookies()
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
+      cookies: {
+        get(name: string) { return cookieStore.get(name)?.value },
+        set(name: string, value: string, options: any) { cookieStore.set({ name, value, ...options }) },
+        remove(name: string, options: any) { cookieStore.set({ name, value: '', ...options }) },
+      },
+    })
+    const { data, error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', transactionId)
+      .eq('user_id', auth.user.id)
+      .select('id')
+    return !error && data?.length === 1
+  } catch (err) {
+    console.error('transaction delete error:', err instanceof Error ? err.message : 'Unknown error')
+    return false
   }
 }
 
@@ -719,6 +789,115 @@ export async function PATCH(
     }, { status: 200 })
   } catch (err) {
     console.error('PATCH /api/transactions/[id] error:', err instanceof Error ? err.message : 'Unknown error')
+    return NextResponse.json({ error: 'Failed to process request. Please try again.' }, { status: 500 })
+  }
+}
+
+/**
+ * PUT /api/transactions/[id]
+ *
+ * Fully replaces the user-editable transaction fields. Unlike PATCH, amount,
+ * date and type are intentionally editable here. Ownership, category and
+ * payment-source visibility are verified before the write; server-managed
+ * fields (id, user_id, client_ref, created_at) can never be replaced.
+ */
+export async function PUT(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> } | { params: { id: string } }
+) {
+  try {
+    const rawParams = (context as { params: any }).params
+    const params = typeof rawParams?.then === 'function' ? await rawParams : rawParams
+    const transactionId = params?.id
+    if (!isValidUuid(transactionId)) {
+      return NextResponse.json({ error: 'Invalid transaction id.' }, { status: 400 })
+    }
+
+    const auth = await authenticate(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: 'Unauthorized. Please log in.' }, { status: 401 })
+    }
+    const rateLimit = checkRateLimit(auth.user.id, RATE_LIMITS.QUICK_ADD)
+    if (!rateLimit.success) {
+      const resetIn = rateLimit.resetTime ? Math.ceil((rateLimit.resetTime - Date.now()) / 1000) : 60
+      return NextResponse.json({ error: `Rate limit exceeded. Please wait ${resetIn} seconds before trying again.` }, { status: 429 })
+    }
+
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Request body must be a JSON object.' }, { status: 400 })
+    }
+    const validation = transactionSchema.safeParse({ ...body, user_id: auth.user.id })
+    if (!validation.success) {
+      return NextResponse.json({
+        error: 'Invalid transaction data.',
+        details: validation.error.errors.map(issue => ({ path: issue.path.join('.'), message: issue.message })),
+      }, { status: 400 })
+    }
+
+    const existing = await fetchTransaction(transactionId, auth)
+    if (!existing) return NextResponse.json({ error: 'Transaction not found.' }, { status: 404 })
+
+    const options = await fetchOptions(auth)
+    if (!options.categories.some(category => category.id === validation.data.category)) {
+      return NextResponse.json({ error: 'Invalid category selected.' }, { status: 400 })
+    }
+    if (!options.paymentSources.some(source => source.id === validation.data.payment_source)) {
+      return NextResponse.json({ error: 'Invalid payment source selected.' }, { status: 400 })
+    }
+
+    const updated = await applyPatch(transactionId, {
+      amount: validation.data.amount,
+      type: validation.data.type,
+      date: validation.data.date,
+      category: validation.data.category,
+      payment_source: validation.data.payment_source,
+      notes: validation.data.notes ?? null,
+      image_url: validation.data.image_url ?? null,
+    }, auth)
+    if (!updated) {
+      return NextResponse.json({ error: 'Failed to update transaction. Please try again.' }, { status: 500 })
+    }
+    return NextResponse.json({ success: true, data: updated }, { status: 200 })
+  } catch (err) {
+    console.error('PUT /api/transactions/[id] error:', err instanceof Error ? err.message : 'Unknown error')
+    return NextResponse.json({ error: 'Failed to process request. Please try again.' }, { status: 500 })
+  }
+}
+
+/** DELETE /api/transactions/[id] — deletes one transaction owned by the caller. */
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> } | { params: { id: string } }
+) {
+  try {
+    const rawParams = (context as { params: any }).params
+    const params = typeof rawParams?.then === 'function' ? await rawParams : rawParams
+    const transactionId = params?.id
+    if (!isValidUuid(transactionId)) {
+      return NextResponse.json({ error: 'Invalid transaction id.' }, { status: 400 })
+    }
+
+    const auth = await authenticate(request)
+    if (!auth.user) {
+      return NextResponse.json({ error: 'Unauthorized. Please log in.' }, { status: 401 })
+    }
+    const rateLimit = checkRateLimit(auth.user.id, RATE_LIMITS.QUICK_ADD)
+    if (!rateLimit.success) {
+      const resetIn = rateLimit.resetTime ? Math.ceil((rateLimit.resetTime - Date.now()) / 1000) : 60
+      return NextResponse.json({ error: `Rate limit exceeded. Please wait ${resetIn} seconds before trying again.` }, { status: 429 })
+    }
+
+    // Fetch first to preserve the endpoint's non-enumerating 404 behavior.
+    if (!await fetchTransaction(transactionId, auth)) {
+      return NextResponse.json({ error: 'Transaction not found.' }, { status: 404 })
+    }
+    if (!await deleteTransaction(transactionId, auth)) {
+      return NextResponse.json({ error: 'Failed to delete transaction. Please try again.' }, { status: 500 })
+    }
+    return NextResponse.json({ success: true, id: transactionId }, { status: 200 })
+  } catch (err) {
+    console.error('DELETE /api/transactions/[id] error:', err instanceof Error ? err.message : 'Unknown error')
     return NextResponse.json({ error: 'Failed to process request. Please try again.' }, { status: 500 })
   }
 }

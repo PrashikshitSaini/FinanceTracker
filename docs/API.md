@@ -167,6 +167,39 @@ curl -s -X PATCH "https://YOUR-APP.vercel.app/api/transactions/<id>" \
 
 ---
 
+## `PUT /api/transactions/{id}`
+
+Replace all editable fields on one transaction. The body must include
+`amount`, `type`, `date`, `category`, and `payment_source`; `notes` and
+`image_url` are optional. The transaction must belong to the authenticated
+user, and category/payment-source IDs must be visible to that user.
+
+```bash
+curl -s -X PUT "https://YOUR-APP.vercel.app/api/transactions/<id>" \
+  -H "X-API-Key: ftqa_..." \
+  -H "Content-Type: application/json" \
+  -d '{"amount":12.50,"type":"expense","date":"2026-09-15","category":"<category-uuid>","payment_source":"<source-uuid>","notes":"Lunch"}'
+```
+
+Server-managed fields, including `id`, `user_id`, `client_ref`, and timestamps,
+cannot be replaced.
+
+---
+
+## `DELETE /api/transactions/{id}`
+
+Permanently delete one transaction owned by the authenticated user.
+
+```bash
+curl -s -X DELETE "https://YOUR-APP.vercel.app/api/transactions/<id>" \
+  -H "X-API-Key: ftqa_..."
+```
+
+Returns `{"success":true,"id":"<id>"}`. A missing or other user's id returns
+`404` without revealing whether it exists.
+
+---
+
 ## Error responses
 
 All errors are JSON: `{"error": "human-readable description"}`.
@@ -186,7 +219,7 @@ All errors are JSON: `{"error": "human-readable description"}`.
 
 In-memory, **per-user**, **30 requests / minute** across all `/api/quick-add`,
 `/api/transactions` (GET / POST / PUT), and `/api/transactions/{id}`
-(GET / PATCH) calls combined. If you're polling, batch your requests or use a
+(GET / PATCH / PUT / DELETE) calls combined. If you're polling, batch your requests or use a
 cron with a sane interval (every 5 min is plenty for personal use).
 
 Hitting the limit returns `429` with a "wait N seconds" hint in the error
