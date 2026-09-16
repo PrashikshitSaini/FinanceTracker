@@ -48,8 +48,8 @@ function isValidUuid(value: unknown): value is string {
 // Same cap as quick-add — protects against CPU-bound DoS via huge header.
 const API_KEY_MAX_LENGTH = 256
 
-// Same model as quick-add by default. Env-overridable for rollback / upgrade.
-const PATCH_AI_MODEL = process.env.OPENROUTER_QUICK_ADD_MODEL || 'deepseek/deepseek-v4-pro'
+// Same structured-output model as quick-add. Env-overridable for rollback.
+const PATCH_AI_MODEL = process.env.OPENROUTER_QUICK_ADD_MODEL || 'openai/gpt-5.6-luna'
 
 // Cap free-text length so the prompt doesn't balloon and we don't pay for
 // pathological inputs.
@@ -602,9 +602,7 @@ Return ONLY a valid JSON object containing the fields to update. Example shapes:
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 300,
         response_format: { type: 'json_object' },
-        // Disable reasoning so max_tokens is reserved for the actual JSON
-        // patch — see quick-add for the full reasoning behind this.
-        reasoning: { enabled: false },
+        provider: { sort: 'throughput', allow_fallbacks: true, require_parameters: true },
       }),
     })
 

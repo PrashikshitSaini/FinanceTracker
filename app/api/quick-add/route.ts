@@ -26,11 +26,10 @@ const API_KEY_MAX_LENGTH = 256
 
 const AMOUNT_MAX = 1_000_000_000
 
-// OpenRouter model for AI categorization. Env-overridable so we can roll back
-// (or upgrade) without a code deploy. Standard (non-reasoning) mode is intended —
-// reasoning emits `reasoning_details` that would break our strict JSON parse and
-// roughly double latency for a task that doesn't need chain-of-thought.
-const QUICK_ADD_MODEL = process.env.OPENROUTER_QUICK_ADD_MODEL || 'deepseek/deepseek-v4-pro'
+// Luna's standard endpoint is better suited to this strict JSON extraction
+// than the high-reasoning chat endpoint. OpenRouter still picks the fastest
+// available provider and fails over automatically.
+const QUICK_ADD_MODEL = process.env.OPENROUTER_QUICK_ADD_MODEL || 'openai/gpt-5.6-luna'
 
 // Exactly 4 ASCII digits — matches what the DB CHECK constraint enforces on
 // payment_sources.card_last_four. Anything else is rejected before lookup.
@@ -865,11 +864,7 @@ Return ONLY a valid JSON object — no markdown, no explanation:
           // Force JSON. Reasoning models can still wrap output in prose otherwise;
           // strict mode keeps the response a single valid JSON object.
           response_format: { type: 'json_object' },
-          // Disable reasoning. DeepSeek V4 Pro (and other reasoning models on
-          // OpenRouter) reason by default, which consumes the max_tokens budget
-          // BEFORE producing any answer — leaving choices[0].message.content
-          // empty. We don't need chain-of-thought to parse a payment notif.
-          reasoning: { enabled: false },
+          provider: { sort: 'throughput', allow_fallbacks: true, require_parameters: true },
         }),
       })
 

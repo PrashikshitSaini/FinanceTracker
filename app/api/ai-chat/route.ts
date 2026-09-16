@@ -4,20 +4,10 @@ import { cookies } from 'next/headers'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { transactionSchema, sanitizeHtml, validateDate } from '@/lib/validation'
 
-// Two-tier model selection — the client picks per-request via `model_tier`:
-//   • "flash" (default) — DeepSeek V4 Flash. ~4× cheaper, fast, no reasoning.
-//                          Right choice for everyday casual chat in the bubble.
-//   • "pro"             — DeepSeek V4 Pro with reasoning enabled. Slower but
-//                          deeper — surfaced via a brain-icon toggle in the UI.
-//
-// Both are env-overridable for per-deployment rollbacks. The legacy
-// OPENROUTER_CHAT_MODEL env var is honored as the Pro fallback so users who
-// set it before the tiering existed don't have to re-configure.
-const CHAT_MODEL_FLASH = process.env.OPENROUTER_CHAT_MODEL_FLASH || 'deepseek/deepseek-v4-flash'
-const CHAT_MODEL_PRO =
-  process.env.OPENROUTER_CHAT_MODEL_PRO ||
-  process.env.OPENROUTER_CHAT_MODEL ||
-  'deepseek/deepseek-v4-pro'
+// One model for Finn: Luna Pro has its high-reasoning mode built in. OpenRouter
+// ranks its available providers by output throughput and automatically tries
+// the next provider when the first is unavailable.
+const CHAT_MODEL = process.env.OPENROUTER_CHAT_MODEL || 'openai/gpt-5.6-luna-pro'
 
 // Safety bound for the tool-execution loop. If the model keeps requesting
 // tool calls beyond this, we bail rather than rack up unbounded API spend.
@@ -1020,12 +1010,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const incomingMessages: unknown = body?.messages
     const systemContext: unknown = body?.system_context
-    // Tier picker — anything other than literal "pro" treats as Flash. We
-    // never trust client input to silently bump us to the more expensive
-    // tier, but defaulting *down* (to Flash) is fine — that's the cheaper,
-    // faster path.
-    const useProTier = body?.model_tier === 'pro'
-    const modelToUse = useProTier ? CHAT_MODEL_PRO : CHAT_MODEL_FLASH
 
     if (!Array.isArray(incomingMessages)) {
       return NextResponse.json({ error: 'messages array required.' }, { status: 400 })
@@ -1112,16 +1096,20 @@ When a user asks for an action, USE THE TOOL. Don't just describe what they shou
           'X-Title': 'Finance Tracker',
         },
         body: JSON.stringify({
-          model: modelToUse,
+          model: CHAT_MODEL,
           messages: messagesForApi,
           tools: TOOLS,
           tool_choice: 'auto',
-          // Pro tier enables reasoning (chain-of-thought) — that's the
-          // whole point of the brain toggle. Flash skips it for speed/cost.
-          // max_tokens scales accordingly: reasoning eats budget before the
-          // visible answer, so Pro needs more headroom.
-          reasoning: { enabled: useProTier },
-          max_tokens: useProTier ? 2000 : 800,
+          // Luna Pro selects high reasoning in the model itself. Do not send
+          // DeepSeek's old `reasoning` parameter.
+          max_tokens: 2000,
+          provider: {
+            sort: 'throughput',
+            allow_fallbacks: true,
+            // Tool calls must only reach providers that support every request
+            // parameter; otherwise OpenRouter falls through automatically.
+            require_parameters: true,
+          },
         }),
       })
 

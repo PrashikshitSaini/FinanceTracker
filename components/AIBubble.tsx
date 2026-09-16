@@ -6,7 +6,7 @@ import { Transaction, SavingsPlan, Subscription } from '@/types'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
 import { startOfMonth, endOfMonth, format } from 'date-fns'
-import { Sparkles, Brain, Send, X, MessageCircle, Loader2 } from 'lucide-react'
+import { Sparkles, Send, X, MessageCircle, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
 /**
@@ -20,10 +20,8 @@ import ReactMarkdown from 'react-markdown'
  *     to expand.
  *
  *   • **Panel (open)** — a chat dialog with message history, a free-text
- *     input, and a brain icon next to the send button. Tapping the brain
- *     switches to "reasoning mode" (DeepSeek V4 Pro with chain-of-thought
- *     enabled, slower but smarter); leaving it off uses V4 Flash (cheaper
- *     and faster, default for casual chat).
+ *     input. Finn always uses Luna Pro, with high reasoning and OpenRouter's
+ *     fastest available provider.
  *
  * The chat endpoint (/api/ai-chat) can also TAKE ACTIONS via tool calling:
  * managing savings goals, transactions, and subscriptions. We read the
@@ -79,7 +77,6 @@ export default function AIBubble() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [proMode, setProMode] = useState(false)
   const [insight, setInsight] = useState<string | null>(null)
   const [insightDismissed, setInsightDismissed] = useState(false)
 
@@ -247,7 +244,6 @@ export default function AIBubble() {
             },
           ],
           system_context: context,
-          model_tier: 'flash',
         }),
       })
       if (!res.ok || cancelled) return
@@ -325,7 +321,6 @@ export default function AIBubble() {
         body: JSON.stringify({
           messages: newMessages,
           system_context: context,
-          model_tier: proMode ? 'pro' : 'flash',
         }),
       })
       const json = await res.json()
@@ -427,9 +422,7 @@ export default function AIBubble() {
               </div>
               <div className="leading-tight">
                 <div className="font-semibold text-sm">Finn</div>
-                <div className="text-xs text-muted-foreground">
-                  {proMode ? 'Reasoning mode (V4 Pro)' : 'Quick mode (V4 Flash)'}
-                </div>
+                <div className="text-xs text-muted-foreground">Luna Pro</div>
               </div>
             </div>
             <button
@@ -476,7 +469,7 @@ export default function AIBubble() {
               <div className="flex justify-start">
                 <div className="bg-muted rounded-2xl rounded-tl-sm px-3 py-2 text-sm text-muted-foreground flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  {proMode ? 'Thinking carefully…' : 'Typing…'}
+                  Thinking…
                 </div>
               </div>
             )}
@@ -485,18 +478,6 @@ export default function AIBubble() {
           {/* Input bar */}
           <div className="border-t p-2.5">
             <div className="flex items-end gap-1.5">
-              <button
-                onClick={() => setProMode(v => !v)}
-                aria-label={proMode ? 'Switch to quick mode' : 'Switch to reasoning mode'}
-                title={proMode ? 'Reasoning ON — V4 Pro' : 'Reasoning OFF — V4 Flash (faster, cheaper)'}
-                className={
-                  proMode
-                    ? 'flex-shrink-0 h-9 w-9 rounded-full bg-purple-500/15 text-purple-500 border border-purple-500/40 flex items-center justify-center hover:bg-purple-500/25 transition-colors'
-                    : 'flex-shrink-0 h-9 w-9 rounded-full bg-muted text-muted-foreground hover:text-foreground flex items-center justify-center transition-colors'
-                }
-              >
-                <Brain className="h-4 w-4" />
-              </button>
               <input
                 ref={inputRef}
                 value={input}
