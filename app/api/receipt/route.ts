@@ -251,7 +251,8 @@ If you cannot extract required fields, use these defaults:
 - date: ${today}
 - notes: null`
 
-    // Call OpenRouter API with vision model
+    // Luna handles the receipt image and structured extraction. Route to the
+    // highest-throughput provider and automatically fail over on failure.
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -261,7 +262,7 @@ If you cannot extract required fields, use these defaults:
         'X-Title': 'Finance Tracker',
       },
       body: JSON.stringify({
-        model: 'bytedance-seed/seed-1.6-flash',
+        model: process.env.OPENROUTER_RECEIPT_MODEL || 'openai/gpt-5.6-luna',
         messages: [
           {
             role: 'user',
@@ -282,6 +283,8 @@ If you cannot extract required fields, use these defaults:
           }
         ],
         max_tokens: 500,
+        reasoning: { effort: 'high', exclude: true },
+        provider: { sort: 'throughput', allow_fallbacks: true, require_parameters: true },
       }),
     })
 
