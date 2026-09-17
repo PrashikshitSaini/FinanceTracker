@@ -6,8 +6,9 @@ import { Transaction, SavingsPlan, Subscription } from '@/types'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatCurrency } from '@/lib/currency'
 import { startOfMonth, endOfMonth, format } from 'date-fns'
-import { Sparkles, Send, X, MessageCircle, Loader2 } from 'lucide-react'
+import { Sparkles, Send, X, MessageCircle, Loader2, Maximize2, Minimize2, Share2, Plus } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { Textarea } from '@/components/ui/textarea'
 
 /**
  * Finn — the floating AI assistant.
@@ -35,6 +36,7 @@ interface Message {
 }
 
 const INSIGHT_CACHE_KEY = 'aibubble-insight-v1'
+const CHAT_CACHE_KEY = 'finn-chat-v1'
 // Short TTL so the user sees a fresh angle within minutes if they reload —
 // the model gets a new randomly-picked angle each time, so variety only
 // matters if we actually re-fetch. 30 minutes balances cost vs. surprise.
@@ -77,11 +79,28 @@ export default function AIBubble() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [fullScreen, setFullScreen] = useState(false)
   const [insight, setInsight] = useState<string | null>(null)
   const [insightDismissed, setInsightDismissed] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // A private, device-local transcript survives reloads without sending a
+  // user's financial conversations to another service.
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CHAT_CACHE_KEY) || '[]')
+      if (Array.isArray(saved)) setMessages(saved.filter((m: unknown): m is Message => {
+        return typeof m === 'object' && m !== null &&
+          ((m as Message).role === 'user' || (m as Message).role === 'assistant') &&
+          typeof (m as Message).content === 'string'
+      }))
+    } catch { /* ignore invalid old storage */ }
+  }, [])
+  useEffect(() => {
+    try { localStorage.setItem(CHAT_CACHE_KEY, JSON.stringify(messages)) } catch { /* storage unavailable */ }
+  }, [messages])
 
   // ─── Context builder ───────────────────────────────────────────────────────
   // Pulls a compact snapshot of the user's finances, savings goals, and
@@ -283,7 +302,20 @@ export default function AIBubble() {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
-  const closePanel = () => setOpen(false)
+  const closePanel = () => { setFullScreen(false); setOpen(false) }
+
+  const newChat = () => {
+    if (loading || (messages.length && !confirm('Start a new chat? Your current chat stays saved in this browser until you replace it.'))) return
+    setMessages([])
+  }
+
+  const shareChat = async () => {
+    const transcript = messages.map(m => `${m.role === 'user' ? 'You' : 'Finn'}: ${m.content}`).join('\n\n')
+    try {
+      if (navigator.share) await navigator.share({ title: 'Finn chat', text: transcript })
+      else await navigator.clipboard.writeText(transcript)
+    } catch { /* user cancelled sharing */ }
+  }
 
   const dismissInsight = () => {
     setInsight(null)
@@ -361,7 +393,7 @@ export default function AIBubble() {
     }
   }
 
-  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -413,7 +445,11 @@ export default function AIBubble() {
 
       {/* The expanded chat panel */}
       {open && (
-        <div className="fixed inset-x-0 bottom-0 sm:inset-auto sm:bottom-4 sm:right-4 z-50 sm:w-[400px] sm:max-w-[calc(100vw-2rem)] h-[80vh] sm:h-[600px] sm:max-h-[calc(100vh-2rem)] bg-card border sm:rounded-2xl shadow-2xl flex flex-col animate-in slide-in-from-bottom-4 duration-200">
+        <div className={`fixed z-50 bg-card border shadow-2xl flex flex-col animate-in slide-in-from-bottom-4 duration-200 ${
+          fullScreen
+            ? 'inset-0 sm:inset-4 sm:rounded-2xl'
+            : 'inset-x-0 bottom-0 sm:inset-auto sm:bottom-4 sm:right-4 sm:w-[400px] sm:max-w-[calc(100vw-2rem)] h-[80vh] sm:h-[600px] sm:max-h-[calc(100vh-2rem)] sm:rounded-2xl'
+        }`}>
           {/* Header */}
           <div className="flex items-center justify-between p-3 border-b">
             <div className="flex items-center gap-2">
@@ -425,13 +461,14 @@ export default function AIBubble() {
                 <div className="text-xs text-muted-foreground">Luna · high reasoning</div>
               </div>
             </div>
-            <button
-              onClick={closePanel}
-              aria-label="Close"
-              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {fullScreen && <button onClick={newChat} disabled={loading} title="New chat" className="p-1.5 rounded-md hover:bg-muted"><Plus className="h-4 w-4" /></button>}
+              {fullScreen && messages.length > 0 && <button onClick={shareChat} title="Share or copy chat" className="p-1.5 rounded-md hover:bg-muted"><Share2 className="h-4 w-4" /></button>}
+              <button onClick={() => setFullScreen(v => !v)} title={fullScreen ? 'Exit full chat' : 'Open full chat'} className="flex items-center gap-1 p-1.5 rounded-md hover:bg-muted text-muted-foreground text-xs">
+                {fullScreen ? <Minimize2 className="h-4 w-4" /> : <><Maximize2 className="h-4 w-4" /><span>Open full</span></>}
+              </button>
+              <button onClick={closePanel} aria-label="Close" className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"><X className="h-4 w-4" /></button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -455,7 +492,7 @@ export default function AIBubble() {
                     }
                   >
                     {msg.role === 'assistant' ? (
-                      <div className="prose prose-sm prose-invert max-w-none [&>*]:my-1 [&>p]:my-0 [&_ul]:my-1 [&_ol]:my-1">
+                      <div className="max-w-none text-sm leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-primary [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-background [&_pre]:p-2 [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:bg-background [&_th]:p-2 [&_td]:border [&_td]:p-2">
                         <ReactMarkdown>{msg.content}</ReactMarkdown>
                       </div>
                     ) : (
@@ -478,14 +515,19 @@ export default function AIBubble() {
           {/* Input bar */}
           <div className="border-t p-2.5">
             <div className="flex items-end gap-1.5">
-              <input
+              <Textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
+                onInput={e => {
+                  e.currentTarget.style.height = 'auto'
+                  e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 160)}px`
+                }}
                 onKeyDown={handleKey}
                 placeholder="Ask Finn anything…"
                 disabled={loading}
-                className="flex-1 bg-muted/50 border border-input rounded-full px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                rows={1}
+                className="flex-1 min-h-10 max-h-40 resize-none overflow-y-auto bg-muted/50 border border-input rounded-2xl px-3.5 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               />
               <button
                 onClick={handleSend}
