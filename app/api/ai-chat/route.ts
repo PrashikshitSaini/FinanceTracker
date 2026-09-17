@@ -4,10 +4,10 @@ import { cookies } from 'next/headers'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { transactionSchema, sanitizeHtml, validateDate } from '@/lib/validation'
 
-// One model for Finn: Luna Pro has its high-reasoning mode built in. OpenRouter
+// One model for Finn: standard Luna with high reasoning effort. OpenRouter
 // ranks its available providers by output throughput and automatically tries
 // the next provider when the first is unavailable.
-const CHAT_MODEL = process.env.OPENROUTER_CHAT_MODEL || 'openai/gpt-5.6-luna-pro'
+const CHAT_MODEL = process.env.OPENROUTER_CHAT_MODEL || 'openai/gpt-5.6-luna'
 
 // Safety bound for the tool-execution loop. If the model keeps requesting
 // tool calls beyond this, we bail rather than rack up unbounded API spend.
@@ -1098,10 +1098,16 @@ When a user asks for an action, USE THE TOOL. Don't just describe what they shou
         body: JSON.stringify({
           model: CHAT_MODEL,
           messages: messagesForApi,
-          tools: TOOLS,
+          tools: [
+            ...TOOLS,
+            // OpenRouter runs this server-side when Finn needs current web
+            // information; no client-side search key or tool loop is needed.
+            { type: 'openrouter:web_search' },
+          ],
           tool_choice: 'auto',
-          // Luna Pro selects high reasoning in the model itself. Do not send
-          // DeepSeek's old `reasoning` parameter.
+          // High reasoning on the standard Luna tier. Hide reasoning tokens
+          // from the user-facing chat while preserving the model's quality.
+          reasoning: { effort: 'high', exclude: true },
           max_tokens: 2000,
           provider: {
             sort: 'throughput',

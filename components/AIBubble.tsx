@@ -20,7 +20,7 @@ import ReactMarkdown from 'react-markdown'
  *     to expand.
  *
  *   • **Panel (open)** — a chat dialog with message history, a free-text
- *     input. Finn always uses Luna Pro, with high reasoning and OpenRouter's
+ *     input. Finn always uses Luna with high reasoning and OpenRouter's
  *     fastest available provider.
  *
  * The chat endpoint (/api/ai-chat) can also TAKE ACTIONS via tool calling:
@@ -422,7 +422,7 @@ export default function AIBubble() {
               </div>
               <div className="leading-tight">
                 <div className="font-semibold text-sm">Finn</div>
-                <div className="text-xs text-muted-foreground">Luna Pro</div>
+                <div className="text-xs text-muted-foreground">Luna · high reasoning</div>
               </div>
             </div>
             <button
